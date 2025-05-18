@@ -1,0 +1,19 @@
+version: '3'
+services:
+  dev:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - ENV=dev
+    volumes:
+      - .:/app
+    container_name: phase1-dev
+
+  prod:
+    build: .
+    ports:
+      - "8502:8501"
+    environment:
+      - ENV=prod
+    container_name: phase1-prod
