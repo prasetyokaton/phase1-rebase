@@ -1,6 +1,6 @@
 version: '3'
 services:
-  dev:
+  phase1-dev:
     build: .
     container_name: phase1-dev
     ports:
@@ -11,7 +11,7 @@ services:
     restart: always
     
 
-  prod:
+  phase1-prod:
     build: .
     container_name: phase1-prod
     ports:
