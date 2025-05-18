@@ -2,18 +2,20 @@ version: '3'
 services:
   dev:
     build: .
+    container_name: phase1-dev
     ports:
       - "8501:8501"
-    environment:
-      - ENV=dev
+    env_file: .env.dev
     volumes:
       - .:/app
-    container_name: phase1-dev
+    restart: always
+    
 
   prod:
     build: .
+    container_name: phase1-prod
     ports:
       - "8502:8501"
-    environment:
-      - ENV=prod
-    container_name: phase1-prod
+    env_file: .env.prod
+    restart: always
+    

@@ -268,8 +268,27 @@ def apply_rules(df, rules, output_column, source_output_column):
                     })
 
 
+    # Tambahkan Rules Affected & Rules Affected Words hanya untuk Noise Tag
+    if output_column == "Noise Tag":
+        rules_affected_counts = []
+        rules_affected_words = []
+        for i, overwrites in enumerate(overwrite_tracker):
+            words_found = []
+            for item in overwrites:
+                match = re.findall(r': (.+)', item)
+                if match:
+                    words = match[0].split("|")
+                    words_found.extend(words)
+            # Simpan jumlah rules yang match dan keywords-nya
+            rules_affected_counts.append(len(overwrites))
+            rules_affected_words.append("|".join(words_found))
+        df["Rules Affected"] = rules_affected_counts
+        df["Rules Affected Words"] = rules_affected_words
+
+
+
     # Simpan chain overwrite jika hanya untuk Noise Tag
-    df[output_column + " - Chain Overwrite"] = [" ➔ ".join(x) if x else "" for x in overwrite_tracker]
+    #df[output_column + " - Chain Overwrite"] = [" ➔ ".join(x) if x else "" for x in overwrite_tracker]
     summary_df = pd.DataFrame(summary_logs)
     return df, summary_df
 
@@ -322,6 +341,11 @@ def apply_official_account_logic(df, setup_df, project_name):
 
     return df
 
+#def bar progress
+def update_progress(step, total_steps, description):
+    percent = int((step / total_steps) * 100)
+    progress.progress(percent)
+    status_text.text(f"{description} ({percent}%)")
 
 
 # === MULAI STREAMLIT APP ===
@@ -367,19 +391,26 @@ if load_success:
     remove_duplicate_links = st.checkbox("Remove duplicate link")
     keep_raw_data = st.checkbox("Keep RAW Data (Save original file as separate sheet)")
 
-    # New checkboxes for Media Tier and KOL Tier
+    # New checkboxes for Media Tier
     apply_media_tier = st.checkbox("Apply Media Tier")
 
-    # New checkboxes for Media Tier and KOL Tier
-    apply_kol_type = st.checkbox("Apply KOL Type")
+    # New checkboxes for Creator Tier
+    apply_kol_type = st.checkbox("Apply Creator Type")
 
     submit = st.button("Submit")
 
     if submit:
+        # Progress bar setup
+        progress = st.progress(0)
+        status_text = st.empty()
+
         if project_name == "Pilih Project" or uploaded_raw is None:
             st.error("❌ Anda harus memilih project dan upload raw data sebelum submit.")
         else:
-            st.success(f"✅ Project: {project_name} | File Loaded Successfully!")
+            #st.success(f"✅ Project: {project_name} | File Loaded Successfully!")
+            
+            #Load data berhasil
+            update_progress(1, 6, "📁 File Loaded Successfully")
 
             start_time = time.time()
 
@@ -430,6 +461,9 @@ if load_success:
             df_official_account_setup = pd.read_excel(xls, sheet_name="Official Account Setup")
             df_processed = apply_official_account_logic(df_processed, df_official_account_setup, project_name)
 
+            # apply_official_account_logic
+            update_progress(2, 6, "🔍 Menerapkan Official Account")
+
 
             # Bersihkan trailing .0 hanya untuk kolom 'Noise Tag' jika diperlukan
             if "Noise Tag" in df_processed.columns and df_processed["Noise Tag"].notna().any():
@@ -462,7 +496,7 @@ if load_success:
             )
 
             # Apply Gender Prediction
-            df_processed = fill_gender(df_processed)
+            #df_processed = fill_gender(df_processed)
 
             # Tambahkan ini untuk Issue
             df_processed, summary_df_issue = apply_rules(
@@ -483,9 +517,16 @@ if load_success:
             # Gabungkan summary Noise Tag + Issue + Sub Issue
             summary_combined = pd.concat([summary_df, summary_df_issue, summary_df_sub_issue], ignore_index=True)
 
+            # apply_rules
+            update_progress(3, 6, "⚙️ Menjalankan Rules")
+
             # === Hitung kolom Followers ===
             if "Original Reach" in df_processed.columns and "Potential Reach" in df_processed.columns:
                 df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
+
+
+            # hitung followers dan media tier
+            update_progress(4, 6, "🧠 Menghitung Followers & Media Tier")
 
 
             # Apply Media Tier if checked
@@ -507,19 +548,42 @@ if load_success:
             ordered_cols = ordered_cols[ordered_cols["Hide"].str.lower() != "yes"]["Column Name"].tolist()
             final_cols = [col for col in ordered_cols if col in df_processed.columns]
 
+
+
+            # Pastikan Rules Affected dan Rules Affected Words ikut disimpan
+            if "Rules Affected" in df_processed.columns and "Rules Affected Words" in df_processed.columns:
+                if "Rules Affected" not in final_cols:
+                    final_cols.append("Rules Affected")
+                if "Rules Affected Words" not in final_cols:
+                    final_cols.append("Rules Affected Words")
+
+
+
             df_final = df_processed[final_cols]
 
-            
+            # simpan ke output_buffer
+            update_progress(5, 6, "📊 Menyusun hasil & export")
+
             # Save Output
             tanggal_hari_ini = datetime.now().strftime("%Y-%m-%d")
             output_filename = f"{project_name}_{tanggal_hari_ini}.xlsx"
 
             #Jika keep raw data dan tidak keep raw data
-            with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+            #with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+            #    if keep_raw_data:
+            #        df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
+            #    df_final.to_excel(writer, sheet_name="Process Data", index=False)
+
+            from io import BytesIO
+
+            # Simpan hasil ke dalam memory, bukan file
+            output_buffer = BytesIO()
+            with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
                 if keep_raw_data:
                     df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
                 df_final.to_excel(writer, sheet_name="Process Data", index=False)
 
+            output_buffer.seek(0)
 
             end_time = time.time()
             minutes, seconds = divmod(end_time - start_time, 60)
@@ -529,58 +593,129 @@ if load_success:
             hours, remainder = divmod(duration_seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
 
-            st.info(f"🕒 Proses ini berjalan selama {int(hours)} jam {int(minutes)} menit {int(seconds)} detik.")
+
+            # Simpan ke session_state agar tidak hilang saat rerun
+            st.session_state["output_excel_bytes"] = output_buffer.getvalue()
+            st.session_state["download_filename"] = output_filename
+            st.session_state["summary_df"] = summary_combined
+            st.session_state["df_final"] = df_final
+
+
+            # Simpan Noise Tag Summary
+            if "Noise Tag" in df_processed.columns:
+                noise_summary = df_processed["Noise Tag"].astype(str).str.replace(r"\.0$", "", regex=True).value_counts().reset_index()
+                noise_summary.columns = ["Noise Tag", "Jumlah"]
+                description_map = {
+                    "0": "Valid Content",
+                    "1": "Official Brand",
+                    "2": "Exclude Content (noise)",
+                    "3": "Need QC"
+                }
+                noise_summary["Description"] = noise_summary["Noise Tag"].astype(str).map(description_map)
+                st.session_state["noise_summary_df"] = noise_summary
+
+            # Simpan durasi proses
+            st.session_state["process_duration"] = f"{int(hours)} jam {int(minutes)} menit {int(seconds)} detik"
+
+            #Finish
+            update_progress(6, 6, "✅ Proses selesai")
+
+            #st.info(f"🕒 Proses ini berjalan selama {int(hours)} jam {int(minutes)} menit {int(seconds)} detik.")
 
 
             # 1. Tampilkan Summary Execution Report
-            st.subheader("📊 Summary Execution Report")
-            with st.expander("Lihat Summary Execution Report"):
-                if not summary_df.empty:
-                    # Hilangkan .0 di Output Value
-                    summary_cleaned = summary_combined.copy()
-                    summary_cleaned["Output Value"] = summary_cleaned["Output Value"].astype(str).str.replace(r"\.0$", "", regex=True)
+            #st.subheader("📊 Summary Execution Report")
+            #with st.expander("Lihat Summary Execution Report"):
+            #    if not summary_df.empty:
+            #        # Hilangkan .0 di Output Value
+            #        summary_cleaned = summary_combined.copy()
+            #        summary_cleaned["Output Value"] = summary_cleaned["Output Value"].astype(str).str.replace(r"\.0$", "", regex=True)
 
-                    summary_sorted = summary_cleaned.sort_values(by="Priority", ascending=False)
-                    st.dataframe(summary_sorted[[
-                        "Priority", "Matching Column", "Matching Value", "Matching Type",
-                        "Channel", "Affected Rows", "Output Column", "Output Value"
-                    ]])
+            #       summary_sorted = summary_cleaned.sort_values(by="Priority", ascending=False)
+            #       st.dataframe(summary_sorted[[
+            #           "Priority", "Matching Column", "Matching Value", "Matching Type",
+            #           "Channel", "Affected Rows", "Output Column", "Output Value"
+            #       ]])
 
-                    # 🔹 Tambahan Ringkasan Noise Tag
-                    if "Noise Tag" in df_processed.columns:
-                        st.markdown("**🧮 Ringkasan Noise Tag:**")
-                        noise_summary = df_processed["Noise Tag"].astype(str).str.replace(r"\.0$", "", regex=True).value_counts().reset_index()
-                        noise_summary.columns = ["Noise Tag", "Jumlah"]
+            #      # 🔹 Tambahan Ringkasan Noise Tag
+            #        if "Noise Tag" in df_processed.columns:
+            #            st.markdown("**🧮 Ringkasan Noise Tag:**")
+            #            noise_summary = df_processed["Noise Tag"].astype(str).str.replace(r"\.0$", "", regex=True).value_counts().reset_index()
+            #            noise_summary.columns = ["Noise Tag", "Jumlah"]
 
-                        description_map = {
-                            "0": "Valid Content",
-                            "1": "Official Brand",
-                            "2": "Exclude Content (noise)",
-                            "3": "Need QC"
-                        }
-                        noise_summary["Description"] = noise_summary["Noise Tag"].astype(str).map(description_map)
-                        st.dataframe(noise_summary)
-                else:
-                    st.info("ℹ️ Tidak ada rule yang match pada data ini.")
+            #            description_map = {
+            #                "0": "Valid Content",
+            #                "1": "Official Brand",
+            #                "2": "Exclude Content (noise)",
+            #                "3": "Need QC"
+            #            }
+            #            noise_summary["Description"] = noise_summary["Noise Tag"].astype(str).map(description_map)
+            #            st.dataframe(noise_summary)
+            #    else:
+            #        st.info("ℹ️ Tidak ada rule yang match pada data ini.")
 
             # 2. Tampilkan Chain Overwrite Tracker
-            st.subheader("🧩 Chain Overwrite Tracker")
-            with st.expander("Lihat Chain Overwrite Tracker"):
-                chain_overwrite_columns = [output_column + " - Chain Overwrite" for output_column in ["Noise Tag"]]
-                if any(col in df_final.columns for col in chain_overwrite_columns):
-                    chain_overwrite_df = df_final[chain_overwrite_columns]
-                    st.dataframe(chain_overwrite_df)
-                else:
-                    st.info("ℹ️ Tidak ada perubahan tercatat (Chain Overwrite kosong).")
+            #st.subheader("🧩 Chain Overwrite Tracker")
+            #with st.expander("Lihat Chain Overwrite Tracker"):
+            #    chain_overwrite_columns = [output_column + " - Chain Overwrite" for output_column in ["Noise Tag"]]
+            #    if any(col in df_final.columns for col in chain_overwrite_columns):
+            #        chain_overwrite_df = df_final[chain_overwrite_columns]
+            #        st.dataframe(chain_overwrite_df)
+            #    else:
+            #        st.info("ℹ️ Tidak ada perubahan tercatat (Chain Overwrite kosong).")
 
             # 3. Tombol Download Hasil di paling bawah
-            st.success(f"⏱️ Proses selesai dalam {int(minutes)} menit {int(seconds)} detik")
-            st.download_button(
-                label="⬇️ Download Hasil Excel",
-                data=open(output_filename, "rb").read(),
-                file_name=output_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+
+            # Simpan nama file hasil ke session_state
+            #st.session_state["output_filename"] = output_filename
+
+            #st.success(f"⏱️ Proses selesai dalam {int(minutes)} menit {int(seconds)} detik")
+            #st.download_button(
+            #    label="⬇️ Download Hasil Excel",
+            #    data=open(output_filename, "rb").read(),
+            #    file_name=output_filename,
+            #    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            #)
+
+    # Tampilkan tombol download jika tersedia
+    if "output_excel_bytes" in st.session_state:
+        st.download_button(
+            label="⬇️ Download Hasil Excel",
+            data=st.session_state["output_excel_bytes"],
+            file_name=st.session_state["download_filename"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # Tampilkan durasi proses
+    if "process_duration" in st.session_state:
+        st.info(f"🕒 Proses ini berjalan selama {st.session_state['process_duration']}.")
+
+
+    # Tampilkan Summary Execution Report jika ada
+    if "summary_df" in st.session_state:
+        st.subheader("📊 Summary Execution Report")
+        with st.expander("**🧮 Lihat Summary Execution Report**"):
+            summary_df = st.session_state["summary_df"]
+            summary_df["Output Value"] = summary_df["Output Value"].astype(str).str.replace(r"\.0$", "", regex=True)
+            summary_sorted = summary_df.sort_values(by="Priority", ascending=False)
+            st.dataframe(summary_sorted[[
+                "Priority", "Matching Column", "Matching Value", "Matching Type",
+                "Channel", "Affected Rows", "Output Column", "Output Value"
+            ]])
+
+            # Tambahkan Ringkasan Noise Tag jika ada
+            if "noise_summary_df" in st.session_state:
+                st.markdown("**🧮 Ringkasan Noise Tag:**")
+                st.dataframe(st.session_state["noise_summary_df"]) 
+            
+            if "df_final" in st.session_state:
+                st.subheader("📌 Rules Affected Preview")
+                st.dataframe(
+                    st.session_state["df_final"][["Rules Affected", "Rules Affected Words"]]
+                )
+
+
+
 
 else:
     st.stop()
