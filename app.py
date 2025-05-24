@@ -8,7 +8,7 @@ import joblib
 import re
 import gspread
 from google.oauth2.service_account import Credentials
-
+from pathlib import Path
 
 # Load the model and vectorizer for gender prediction
 class GenderPredictor:
@@ -55,7 +55,8 @@ def fill_gender(df):
 def apply_media_tier_logic(df):
     try:
         # === SETUP GOOGLE SHEETS API ===
-        SERVICE_ACCOUNT_FILE = '/home/insights-vps/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+        
+        SERVICE_ACCOUNT_FILE = str(Path(__file__).resolve().parent.parent / '.secretcontainer/insightsautomation-460807-acdad1ee7590.json')
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         client = gspread.authorize(creds)
