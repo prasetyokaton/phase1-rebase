@@ -56,6 +56,7 @@ def apply_media_tier_logic(df):
     try:
         # === SETUP GOOGLE SHEETS API ===
         SERVICE_ACCOUNT_FILE = '/home/insights-vps/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+        print(SERVICE_ACCOUNT_FILE)
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         client = gspread.authorize(creds)
