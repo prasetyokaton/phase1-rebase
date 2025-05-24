@@ -6,9 +6,6 @@ import requests
 from io import BytesIO
 import joblib
 import re
-import gspread
-from google.oauth2.service_account import Credentials
-
 
 # Load the model and vectorizer for gender prediction
 class GenderPredictor:
@@ -54,66 +51,59 @@ def fill_gender(df):
 # === Apply Media Tier Logic ===
 def apply_media_tier_logic(df):
     try:
-        # === SETUP GOOGLE SHEETS API ===
-        SERVICE_ACCOUNT_FILE = 'phase1\.secretcontainer\insightsautomation-460807-acdad1ee7590.json'
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        client = gspread.authorize(creds)
+        file_id = "1LIcEKO-fdXfo1v-IUeU64He5mh6ti1nc"  # ID file Excel update Media Tier
 
-        # === BUKA GOOGLE SHEET ===
-        sheet_id = "1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII"
-        spreadsheet = client.open_by_key(sheet_id)
+        # Download file Excel
+        download_url_media_tier = f"https://drive.google.com/uc?id={file_id}"
+        response_media_tier = requests.get(download_url_media_tier)
+        xls_media_tier = pd.ExcelFile(BytesIO(response_media_tier.content))
 
-        # === LOAD kedua sheet ===
-        data_client = spreadsheet.worksheet("Le Minerale - from Client").get_all_records()
-        data_online = spreadsheet.worksheet("Online with AVE - Updated").get_all_records()
+        # Load the relevant sheets
+        sheet_client = pd.read_excel(xls_media_tier, sheet_name="Le Minerale - from Client")
+        sheet_online = pd.read_excel(xls_media_tier, sheet_name="Online with AVE - Updated")
+        
         load_success = True
     except Exception as e:
-        st.error(f"❌ Gagal load Google Sheet Media Tier: {e}")
-        return df  # keluar tanpa ubah jika gagal
+        st.error(f"❌ Gagal load file Media Tier dari Google Drive: {e}")
+        load_success = False
 
     if load_success:
-        # Buat dictionary media_tier dengan key lowercase
-        media_tier_dict_client = {
-            row.get("Media Name", "").strip().lower(): row.get("Media Tier")
-            for row in data_client if row.get("Media Name")
-        }
-        media_tier_dict_online = {
-            row.get("Media Name", "").strip().lower(): row.get("Media Tier")
-            for row in data_online if row.get("Media Name")
-        }
 
-        # STEP 1: isi dari client sheet
-        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
-            media_name = str(row["Media Name"]).strip().lower()
-            if media_name in media_tier_dict_client:
-                df.at[index, "Media Tier"] = media_tier_dict_client[media_name]
+        # Mapping 'Media Name' to 'Media Tier' for both sheets
+        media_tier_dict = {}
+        
+        # Get media tier from the "Le Minerale - from Client"
+        for index, row in sheet_client.iterrows():
+            media_name = row['Media Name']
+            media_tier = row['Media Tier']
+            media_tier_dict[media_name] = media_tier
 
-        # STEP 2: isi dari online sheet
-        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
-            media_name = str(row["Media Name"]).strip().lower()
-            if media_name in media_tier_dict_online:
-                df.at[index, "Media Tier"] = media_tier_dict_online[media_name]
+        # Get media tier from the "Online with AVE - Updated"
+        for index, row in sheet_online.iterrows():
+            media_name = row['Media Name']
+            media_tier = row['Media Tier']
+            if media_name not in media_tier_dict:
+                media_tier_dict[media_name] = media_tier
 
-        # STEP 3: isi berdasarkan Ad Value
-        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
-            media_name = str(row["Media Name"]).strip()
-            ad_value = row.get("Ad Value")
-
-            # Hanya proses jika media_name dan ad_value tidak kosong
-            if media_name and pd.notna(ad_value):
-                try:
-                    ad_value = float(ad_value)
-                    if ad_value >= 18000000:
-                        df.at[index, "Media Tier"] = 1
-                    elif ad_value >= 12600000:
-                        df.at[index, "Media Tier"] = 2
-                    else:
-                        df.at[index, "Media Tier"] = 3
-                except:
-                    continue  # jika ad_value tidak bisa dikonversi, skip
-
+        # Apply media tier to the raw data
+        for index, row in df[df['Media Name'].notna()].iterrows():
+            media_name = row['Media Name']
+            
+            # Check if Media Name is in our media_tier_dict, otherwise apply Ad Value logic
+            if media_name in media_tier_dict:
+                df.at[index, 'Media Tier'] = media_tier_dict[media_name]
+            else:
+                ad_value = row['Ad Value']
+                if ad_value >= 18000000:
+                    df.at[index, 'Media Tier'] = 1
+                elif ad_value >= 12600000:
+                    df.at[index, 'Media Tier'] = 2
+                else:
+                    df.at[index, 'Media Tier'] = 3
         return df
+    
+    else:
+        st.stop()
 
 
 # Function to update the "Media Tier" visibility in the Column Order Setup sheet
@@ -644,12 +634,12 @@ if load_success:
 
 
             with open(st.session_state["download_filename"], "rb") as file:
-                st.download_button(
-                    label="⬇️ Download Hasil Excel",
-                    data=file.read(),
-                    file_name=st.session_state["download_filename"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label="⬇️ Download Hasil Excel",
+                data=file.read(),
+                file_name=st.session_state["download_filename"],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 
             #st.info(f"🕒 Proses ini berjalan selama {int(hours)} jam {int(minutes)} menit {int(seconds)} detik.")
@@ -710,12 +700,12 @@ if load_success:
             #)
 
     # Tampilkan tombol download jika tersedia
-    #if "output_excel_bytes" in st.session_state:
-    #    st.download_button(
-    #        label="⬇️ Download Hasil Excel",
-    #        data=st.session_state["output_excel_bytes"],
-    #        file_name=st.session_state["download_filename"],
-    #        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if "output_excel_bytes" in st.session_state:
+        st.download_button(
+            label="⬇️ Download Hasil Excel",
+            data=st.session_state["output_excel_bytes"],
+            file_name=st.session_state["download_filename"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     # Tampilkan durasi proses

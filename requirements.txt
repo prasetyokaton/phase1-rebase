@@ -4,3 +4,5 @@ openpyxl
 joblib
 scikit-learn
 requests
+gspread
+google-auth

@@ -1,3 +1,8 @@
+
+#secret file manual upload
+.secretcontainer/
+
+#secret file
 .streamlit/secrets.toml
 
 # Byte-compiled / optimized / DLL files
