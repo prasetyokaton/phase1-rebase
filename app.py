@@ -25,6 +25,113 @@ class GenderPredictor:
         proba = self.model.predict_proba(vector).max()
         return self.labels[result], round(proba * 100, 2)
 
+
+def apply_creator_type_logic(df):
+    try:
+        # Setup Google Sheets access
+        SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        client = gspread.authorize(creds)
+
+        # --- Load GSheet for Media Tier & PAP/PA ---
+        sheet_main = client.open_by_key("1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII")
+        df_online = pd.DataFrame(sheet_main.worksheet("Online with AVE - Updated").get_all_records())
+
+        # --- Load GSheet for KOL & HM ---
+        sheet_kol = client.open_by_key("1FKIw9tpwiZs2VlIx4xjwPp0u_8BbxFRYF5uY8Jf_ozg")
+        df_kol = pd.DataFrame(sheet_kol.worksheet("List KOL Nojorono").get_all_records())
+        df_hm = pd.DataFrame(sheet_kol.worksheet("List Homeless Media").get_all_records())
+
+        # Bersihkan kolom
+        df_online.columns = df_online.columns.str.strip()
+        df_kol.columns = df_kol.columns.str.strip()
+        df_hm.columns = df_hm.columns.str.strip()
+        
+        if "Creator Type" not in df.columns:
+            df['Creator Type'] = ""
+
+
+        # --- STEP 1: PA (Publisher Article) ---
+        pa_channels = ["online", "media online"]
+        for idx, row in df[df["Channel"].str.lower().isin(pa_channels)].iterrows():
+            media_name = str(row["Media Name"]).strip().lower()
+            tier = df_online[df_online["Media Name"].str.strip().str.lower() == media_name]["Media Tier"]
+            if not tier.empty:
+                t = str(tier.iloc[0]).strip()
+                if t == "1":
+                    df.at[idx, "Creator Type"] = "PA Tier 1"
+                elif t == "2":
+                    df.at[idx, "Creator Type"] = "PA Tier 2"
+                elif t == "3":
+                    df.at[idx, "Creator Type"] = "PA Tier 3"
+
+        # --- STEP 2: PAP (PA Publisher) ---
+        for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok"])].iterrows():
+            channel = row["Channel"].lower()
+            if channel == "instagram":
+                author = str(row.get("Author", "")).strip().lower()
+                kol = df_online[df_online["Instagram Author Name"].str.strip().str.lower() == author]
+            elif channel == "tiktok":
+                author = str(row.get("Author", "")).strip().lower()
+                kol = df_online[df_online["Tiktok Author Name"].str.strip().str.lower() == author]
+            else:
+                continue
+            if not kol.empty:
+                tier = str(kol.iloc[0].get("Media Tier", "")).strip()
+                if tier in ["1", "2", "3"]:
+                    df.at[idx, "Creator Type"] = f"PAP Tier {tier}"
+
+        # --- STEP 3: HM (Homeless Media) ---
+        for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok", "facebook", "youtube", "twitter"])].iterrows():
+            author = str(row.get("Author", "")).strip().lower()
+            match = df_hm[df_hm["Author Name"].str.strip().str.lower() == author]
+            if not match.empty:
+                followers = match.iloc[0].get("Followers", "")
+                try:
+                    followers = int(str(followers).replace(",", "").strip())
+                    if followers > 1_000_000:
+                        df.at[idx, "Creator Type"] = "HM Mega"
+                    elif followers > 100_000:
+                        df.at[idx, "Creator Type"] = "HM Macro"
+                    elif followers > 10_000:
+                        df.at[idx, "Creator Type"] = "HM Micro"
+                    elif followers > 1_000:
+                        df.at[idx, "Creator Type"] = "HM Nano"
+                    else:
+                        df.at[idx, "Creator Type"] = "HM Micro Nano"
+                except:
+                    continue
+
+        # --- STEP 4: KOL ---
+        for idx, row in df[(df["Channel"].str.lower() == "tiktok") & (df["Creator Type"] == "")].iterrows():
+            author = str(row.get("Author", "")).strip().lower()
+            match = df_kol[df_kol["Author Name Tiktok"].str.strip().str.lower() == author]
+            followers = row.get("Followers", 0)
+            try:
+                followers = int(str(followers).replace(",", "").strip())
+                if not match.empty or followers > 0:  # masih bisa dinilai dari followers
+                    if followers > 1_000_000:
+                        df.at[idx, "Creator Type"] = "KOL Mega"
+                    elif followers > 100_000:
+                        df.at[idx, "Creator Type"] = "KOL Macro"
+                    elif followers > 10_000:
+                        df.at[idx, "Creator Type"] = "KOL Micro"
+                    elif followers > 1_000:
+                        df.at[idx, "Creator Type"] = "KOL Nano"
+                    else:
+                        df.at[idx, "Creator Type"] = "KOL Micro Nano"
+            except:
+                continue
+
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Gagal memproses Creator Type: {e}")
+        return df
+
+
+
 # Function to process and fill gender prediction if confidence > 70%
 def fill_gender(df):
     predictor = GenderPredictor()
@@ -405,8 +512,12 @@ if load_success:
     # New checkboxes for Media Tier
     apply_media_tier = st.checkbox("Apply Media Tier")
 
-    # New checkboxes for Creator Tier
-    apply_kol_type = st.checkbox("Apply Creator Type")
+    if not apply_media_tier:
+        st.caption("🔒 Centang 'Apply Media Tier' terlebih dahulu untuk mengaktifkan Creator Type")
+        st.checkbox("Apply Creator Type", key="disabled_creator_type", disabled=True)
+        apply_creator_type = False
+    else:
+        apply_creator_type = st.checkbox("Apply Creator Type")
 
     submit = st.button("Submit")
 
@@ -549,6 +660,16 @@ if load_success:
                 df_column_order = update_media_tier_visibility(df_column_order)
 
 
+            # Pastikan Creator Type juga ditampilkan (tidak di-hide)
+            if "Creator Type" in df_column_order["Column Name"].values:
+                creator_type_row = df_column_order[df_column_order["Column Name"] == "Creator Type"]
+                if not creator_type_row.empty and creator_type_row["Hide"].iloc[0].strip().lower() == "yes":
+                    df_column_order.loc[df_column_order["Column Name"] == "Creator Type", "Hide"] = "No"
+
+            #kalau creator type nyala
+            if apply_creator_type:
+                df_processed = apply_creator_type_logic(df_processed)
+
 
             # Setup Column Order
             if project_name in df_column_order["Project"].values:
@@ -570,7 +691,10 @@ if load_success:
 
 
 
-            df_final = df_processed[final_cols]
+            #df_final = df_processed[final_cols]
+            if "Creator Type" not in final_cols and "Creator Type" in df_processed.columns:
+                final_cols.append("Creator Type")
+
 
             # simpan ke output_buffer
             update_progress(5, 6, "📊 Menyusun hasil & export")
@@ -681,6 +805,11 @@ if load_success:
                     st.session_state["df_final"][["Rules Affected", "Rules Affected Words"]]
                 )
 
+            if "df_final" in st.session_state and "Creator Type" in st.session_state["df_final"].columns:
+                st.markdown("**🧬 Ringkasan Creator Type:**")
+                creator_summary = st.session_state["df_final"]["Creator Type"].value_counts().reset_index()
+                creator_summary.columns = ["Creator Type", "Jumlah"]
+                st.dataframe(creator_summary)
 
 
 
