@@ -53,27 +53,19 @@ def apply_creator_type_logic(df):
 
 
         # --- STEP 1: PA (Publisher Article) ---
-        pa_channels = ["online", "media online"]
-        for idx, row in df[df["Channel"].str.lower().isin(pa_channels)].iterrows():
-            media_name = str(row["Media Name"]).strip().lower()
-            tier = df_online[df_online["Media Name"].str.strip().str.lower() == media_name]["Media Tier"]
-            if not tier.empty:
-                t = str(tier.iloc[0]).strip()
-                if t == "1":
-                    df.at[idx, "Creator Type"] = "PA Tier 1"
-                elif t == "2":
-                    df.at[idx, "Creator Type"] = "PA Tier 2"
-                elif t == "3":
-                    df.at[idx, "Creator Type"] = "PA Tier 3"
+        for idx, row in df[df["Channel"].str.strip().str.lower() == "online media"].iterrows():
+            media_name = str(row.get("Media Name", "")).strip()
+            media_tier = str(row.get("Media Tier", "")).strip()
+            if media_name and media_tier in ["1", "2", "3"]:
+                df.at[idx, "Creator Type"] = f"PA Tier {media_tier}"
 
         # --- STEP 2: PAP (PA Publisher) ---
         for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok"])].iterrows():
             channel = row["Channel"].lower()
+            author = str(row.get("Author", "")).strip().lower()
             if channel == "instagram":
-                author = str(row.get("Author", "")).strip().lower()
                 kol = df_online[df_online["Instagram Author Name"].str.strip().str.lower() == author]
             elif channel == "tiktok":
-                author = str(row.get("Author", "")).strip().lower()
                 kol = df_online[df_online["Tiktok Author Name"].str.strip().str.lower() == author]
             else:
                 continue
@@ -82,57 +74,71 @@ def apply_creator_type_logic(df):
                 if tier in ["1", "2", "3"]:
                     df.at[idx, "Creator Type"] = f"PAP Tier {tier}"
 
-        # --- STEP 3: HM (Homeless Media) ---
+        # --- STEP 3: HM (Homeless Media + Keyword Matching) ---
+        media_keywords = [ ... ]  # gunakan list panjangmu seperti sebelumnya
+
         for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok", "facebook", "youtube", "twitter"])].iterrows():
             author = str(row.get("Author", "")).strip().lower()
-            match = df_hm[df_hm["Author Name"].str.strip().str.lower() == author]
-            if not match.empty:
-                followers = match.iloc[0].get("Followers", "")
-                try:
-                    followers = int(str(followers).replace(",", "").strip())
-                    if followers > 1_000_000:
-                        df.at[idx, "Creator Type"] = "HM Mega"
-                    elif followers > 100_000:
-                        df.at[idx, "Creator Type"] = "HM Macro"
-                    elif followers > 10_000:
-                        df.at[idx, "Creator Type"] = "HM Micro"
-                    elif followers > 1_000:
-                        df.at[idx, "Creator Type"] = "HM Nano"
-                    else:
-                        df.at[idx, "Creator Type"] = "HM Micro Nano"
-                except:
-                    continue
+            match_list = df_hm[df_hm["Author Name"].str.strip().str.lower() == author]
 
-        # --- STEP 4: KOL ---
-        for idx, row in df[(df["Channel"].str.lower() == "tiktok") & (df["Creator Type"] == "")].iterrows():
+            followers = row.get("Followers", "")
+            try:
+                followers = int(str(followers).replace(",", "").strip())
+            except:
+                followers = 0
+
+            is_hm_from_keyword = any(kw in author for kw in media_keywords)
+            is_hm_listed = not match_list.empty
+
+            if is_hm_listed or is_hm_from_keyword:
+                if followers > 1_000_000:
+                    df.at[idx, "Creator Type"] = "HM Mega"
+                elif followers > 100_000:
+                    df.at[idx, "Creator Type"] = "HM Macro"
+                elif followers > 10_000:
+                    df.at[idx, "Creator Type"] = "HM Micro"
+                elif followers > 1_000:
+                    df.at[idx, "Creator Type"] = "HM Nano"
+                else:
+                    df.at[idx, "Creator Type"] = "HM Micro Nano"
+
+        # --- STEP 4: KOL (Only TikTok, Instagram, Twitter, Facebook, YouTube) ---
+        for idx, row in df[
+            (df["Channel"].str.lower().isin(["tiktok", "instagram", "youtube", "twitter", "facebook"])) &
+            (df["Creator Type"] == "")
+        ].iterrows():
+            channel = row["Channel"].lower()
             author = str(row.get("Author", "")).strip().lower()
-            match = df_kol[df_kol["Author Name Tiktok"].str.strip().str.lower() == author]
             followers = row.get("Followers", 0)
             try:
                 followers = int(str(followers).replace(",", "").strip())
-                if not match.empty or followers > 0:  # masih bisa dinilai dari followers
-                    if followers > 1_000_000:
-                        df.at[idx, "Creator Type"] = "KOL Mega"
-                    elif followers > 100_000:
-                        df.at[idx, "Creator Type"] = "KOL Macro"
-                    elif followers > 10_000:
-                        df.at[idx, "Creator Type"] = "KOL Micro"
-                    elif followers > 1_000:
-                        df.at[idx, "Creator Type"] = "KOL Nano"
-                    else:
-                        df.at[idx, "Creator Type"] = "KOL Micro Nano"
             except:
-                continue
+                followers = 0
 
-        return df
+            if channel == "tiktok":
+                kol_check = df_kol["Author Name Tiktok"].str.strip().str.lower() == author
+            elif channel == "instagram":
+                kol_check = df_kol["Author Name Instagram"].str.strip().str.lower() == author
+            else:
+                kol_check = pd.Series([False] * len(df_kol))  # Tidak dicek
 
+            if not kol_check.any() and followers > 0:
+                if followers > 1_000_000:
+                    df.at[idx, "Creator Type"] = "KOL Mega"
+                elif followers > 100_000:
+                    df.at[idx, "Creator Type"] = "KOL Macro"
+                elif followers > 10_000:
+                    df.at[idx, "Creator Type"] = "KOL Micro"
+                elif followers > 1_000:
+                    df.at[idx, "Creator Type"] = "KOL Nano"
+                else:
+                    df.at[idx, "Creator Type"] = "KOL Micro Nano"
+                    
     except Exception as e:
         st.error(f"❌ Gagal memproses Creator Type: {e}")
         return df
 
-
-
-# Function to process and fill gender prediction if confidence > 70%
+# Function to process and fill gender prediction if confidence > 80%
 def fill_gender(df):
     predictor = GenderPredictor()
     for index, row in df[df['Gender'].isna()].iterrows():
@@ -153,7 +159,7 @@ def fill_gender(df):
         gender, probability = predictor.predict(name_cleaned)
         
         # Fill the 'Gender' column if the prediction confidence is greater than 70%
-        if probability > 70:
+        if probability > 80:
             df.at[index, 'Gender'] = gender
     return df
 
@@ -191,17 +197,19 @@ def apply_media_tier_logic(df):
             for row in data_online if row.get("Media Name")
         }
 
-        # STEP 1: isi dari client sheet
+        # STEP 1: isi dari client sheet (hanya jika Media Name tidak kosong)
         for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
-            media_name = str(row["Media Name"]).strip().lower()
-            if media_name in media_tier_dict_client:
+            media_name = str(row.get("Media Name", "")).strip().lower()
+            if media_name and media_name in media_tier_dict_client:
                 df.at[index, "Media Tier"] = media_tier_dict_client[media_name]
+
 
         # STEP 2: isi dari online sheet
         for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
             media_name = str(row["Media Name"]).strip().lower()
-            if media_name in media_tier_dict_online:
+            if media_name and media_name in media_tier_dict_online:
                 df.at[index, "Media Tier"] = media_tier_dict_online[media_name]
+
 
         # STEP 3: isi berdasarkan Ad Value
         for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
@@ -209,7 +217,7 @@ def apply_media_tier_logic(df):
             ad_value = row.get("Ad Value")
 
             # Hanya proses jika media_name dan ad_value tidak kosong
-            if media_name and pd.notna(ad_value):
+            if media_name and media_name.strip() != "" and pd.notna(ad_value):
                 try:
                     ad_value = float(ad_value)
                     if ad_value >= 18000000:
@@ -695,6 +703,8 @@ if load_success:
             if "Creator Type" not in final_cols and "Creator Type" in df_processed.columns:
                 final_cols.append("Creator Type")
 
+            # 💡 FIX MISSING LINE HERE
+            df_final = df_processed[final_cols]
 
             # simpan ke output_buffer
             update_progress(5, 6, "📊 Menyusun hasil & export")
@@ -807,9 +817,19 @@ if load_success:
 
             if "df_final" in st.session_state and "Creator Type" in st.session_state["df_final"].columns:
                 st.markdown("**🧬 Ringkasan Creator Type:**")
-                creator_summary = st.session_state["df_final"]["Creator Type"].value_counts().reset_index()
+                creator_summary = (
+                    st.session_state["df_final"]["Creator Type"]
+                    .fillna("")
+                    .replace("", "(blank)")
+                    .value_counts()
+                    .reset_index()
+                )
                 creator_summary.columns = ["Creator Type", "Jumlah"]
+                # Urutkan: selain (blank) dulu, lalu (blank) di bawah
+                creator_summary["is_blank"] = creator_summary["Creator Type"] == "(blank)"
+                creator_summary = creator_summary.sort_values(by=["is_blank", "Jumlah"], ascending=[True, False]).drop(columns="is_blank")
                 st.dataframe(creator_summary)
+
 
 
 
