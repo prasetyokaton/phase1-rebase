@@ -1,5 +1,8 @@
 FROM python:3.10-slim
 
+# Copy environment variables from Docker Compose
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt .
