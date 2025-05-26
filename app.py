@@ -75,7 +75,25 @@ def apply_creator_type_logic(df):
                     df.at[idx, "Creator Type"] = f"PAP Tier {tier}"
 
         # --- STEP 3: HM (Homeless Media + Keyword Matching) ---
-        media_keywords = [ ... ]  # gunakan list panjangmu seperti sebelumnya
+        media_keywords = [
+            "media", "news", "update", "daily", "info", "portal", "tribun", "detik",
+            "times", "today", "berita", "channel", "tv", "net", "kompas", 
+            "kabar", "indozone", "cnn", "liputan", "official", "forum", "post", "koran",
+            "zona", "zone", "idn", "music", "musik", "tech", "health", "headline", "newsroom",
+            "film", "local", "lokal", "hospital", "resort", "radio", "digital", 
+            "agency", "studio", "group", "restaurant", "university", "universitas", "collage", "grup", "festival",
+            "foundation", "institut", "institute", "org", "academy", "school", "sekolah", "kampus", 
+            "community", "komunitas", "cafe", "coffee", "sport",
+            "wisata", "tempat", "clinic", "fotografi", "videografi", "editor", "visual",
+            "jakarta", "bandung", "bali", "jogja", "banten", "surabaya", "nusantara", "bogor", "bekasi", "tangerang",
+            "mart", "indomie", "minuman", "oleholeh", "jajanan", "distro", "merch", "grosir", "wholesale", "toserba", "minimarket", "kios",
+            "travel", "trip", "explore", "vacation", "holiday", "homestay", "penginapan", "villa", "hotel", "kost", "guesthouse",
+            "engineering", "arsitek", "kontraktor", "interior", "furnitur", "elektronik", "mesin",
+            "diskon", "promo", "gratis", "reseller", "dropship", "seller", "jualan", "toko",
+            "quotes", "motivasi", "edukasi", "trivia"
+        ]
+
+
 
         for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok", "facebook", "youtube", "twitter"])].iterrows():
             author = str(row.get("Author", "")).strip().lower()
@@ -133,10 +151,12 @@ def apply_creator_type_logic(df):
                     df.at[idx, "Creator Type"] = "KOL Nano"
                 else:
                     df.at[idx, "Creator Type"] = "KOL Micro Nano"
-                    
+
     except Exception as e:
         st.error(f"❌ Gagal memproses Creator Type: {e}")
         return df
+    
+    return df
 
 # Function to process and fill gender prediction if confidence > 80%
 def fill_gender(df):
@@ -491,6 +511,10 @@ try:
     df_column_setup = pd.read_excel(xls, sheet_name="Column Setup")
     df_rules = pd.read_excel(xls, sheet_name="Rules")
     df_column_order = pd.read_excel(xls, sheet_name="Column Order Setup")
+    # ✅ Validasi keberadaan dan isi kolom penting
+    if df_column_order is None or df_column_order.empty or "Column Name" not in df_column_order.columns or "Hide" not in df_column_order.columns:
+        st.error("❌ Gagal load sheet 'Column Order Setup'. Pastikan sheet tersedia dan kolom 'Column Name' serta 'Hide' ada di dalamnya.")
+        st.stop()
     df_method_1_keyword = pd.read_excel(xls, sheet_name="Method 1 Keyword")
     df_method_selection = pd.read_excel(xls, sheet_name="Method Selection")
 
@@ -526,6 +550,16 @@ if load_success:
         apply_creator_type = False
     else:
         apply_creator_type = st.checkbox("Apply Creator Type")
+        if apply_creator_type:
+            if (
+                df_column_order is not None and
+                "Column Name" in df_column_order.columns and
+                "Hide" in df_column_order.columns
+            ):
+                df_column_order.loc[
+                    df_column_order["Column Name"] == "Creator Type", "Hide"
+                ] = "No"
+
 
     submit = st.button("Submit")
 
@@ -658,7 +692,8 @@ if load_success:
             # hitung followers dan media tier
             update_progress(4, 6, "🧠 Menghitung Followers & Media Tier")
 
-
+            #st.write("🔍 DEBUG - cek nilai df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
+            
             # Apply Media Tier if checked
             if apply_media_tier:
                 # Apply Media Tier logic
@@ -667,7 +702,8 @@ if load_success:
                 # Update "Media Tier" visibility to be shown
                 df_column_order = update_media_tier_visibility(df_column_order)
 
-
+            #st.write("🔍 DEBUG after media tier - cek nilai df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
+            
             # Pastikan Creator Type juga ditampilkan (tidak di-hide)
             if "Creator Type" in df_column_order["Column Name"].values:
                 creator_type_row = df_column_order[df_column_order["Column Name"] == "Creator Type"]
@@ -678,12 +714,32 @@ if load_success:
             if apply_creator_type:
                 df_processed = apply_creator_type_logic(df_processed)
 
-
+            #st.write("🔍 DEBUG after creator type - cek nilai df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
+            
             # Setup Column Order
             if project_name in df_column_order["Project"].values:
                 ordered_cols = df_column_order[df_column_order["Project"] == project_name]
             else:
                 ordered_cols = df_column_order[df_column_order["Project"] == "Default"]
+
+
+
+            #st.write("🔍 DEBUG - df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
+            #st.write("🔍 DEBUG - df_column_order.head():", df_column_order.head() if df_column_order is not None else "df_column_order is None")
+
+            # Cek project yang dipilih
+            #st.write("🔍 DEBUG - Selected project_name:", project_name)
+
+            # Coba ambil ordered_cols
+            #try:
+            #    ordered_cols_test = df_column_order[df_column_order["Project"] == project_name]
+            #    st.write("🔍 DEBUG - ordered_cols_test:", ordered_cols_test.head())
+            #    st.write("🔍 DEBUG - ordered_cols_test is empty:", ordered_cols_test.empty)
+            #except Exception as e:
+            #    st.write("❌ ERROR saat ambil ordered_cols:", str(e))
+            #st.write("🧩 Daftar Project dari Column Order Setup:", df_column_order["Project"].unique())
+
+
 
             ordered_cols = ordered_cols[ordered_cols["Hide"].str.lower() != "yes"]["Column Name"].tolist()
             final_cols = [col for col in ordered_cols if col in df_processed.columns]
@@ -699,11 +755,10 @@ if load_success:
 
 
 
-            #df_final = df_processed[final_cols]
+            
             if "Creator Type" not in final_cols and "Creator Type" in df_processed.columns:
                 final_cols.append("Creator Type")
 
-            # 💡 FIX MISSING LINE HERE
             df_final = df_processed[final_cols]
 
             # simpan ke output_buffer
@@ -732,10 +787,21 @@ if load_success:
 
 
             # Simpan hasil ke file lokal (bukan hanya memory)
-            with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
-                if keep_raw_data:
-                    df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
-                df_final.to_excel(writer, sheet_name="Process Data", index=False)
+            #with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+            #    if keep_raw_data:
+            #        df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
+            #    df_final.to_excel(writer, sheet_name="Process Data", index=False)
+
+            
+
+            if not keep_raw_data and (df_final is None or df_final.empty):
+                st.error("❌ Tidak ada data yang bisa disimpan. Hasil kosong dan tidak memilih simpan RAW data.")
+            else:
+                with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+                    if keep_raw_data:
+                        df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
+                    if df_final is not None and not df_final.empty:
+                        df_final.to_excel(writer, sheet_name="Process Data", index=False)
 
             # Simpan nama file ke session state agar bisa diakses oleh tombol download
             st.session_state["download_filename"] = output_filename
