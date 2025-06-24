@@ -399,36 +399,58 @@ def apply_rules(df, rules, output_column, source_output_column):
         logging.info(f"⚠️ series: {series}")
 
         if match_type == "contains":
-            if "+" in val:
-                val_parts = val.split("+")
+            def eval_or_group(group_str):
+                """Handle OR and NOT in a group like: 'A|!B|C' """
+                parts = group_str.split("|")
                 submasks = []
-                for v in val_parts:
-                    v = v.strip()
-                    if "|" in v:
-                        keywords = [re.escape(x.strip()) for x in v.split("|")]
-                        if all(k.startswith("\\!") for k in keywords):
-                            keywords_clean = [k[2:] for k in keywords]
-                            submask = ~series.str.contains("|".join(keywords_clean), case=False, na=False)
-                        elif all(not k.startswith("\\!") for k in keywords):
-                            submask = series.str.contains("|".join(keywords), case=False, na=False)
-                        else:
-                            must_not = [k[2:] for k in keywords if k.startswith("\\!")]
-                            must_yes = [k for k in keywords if not k.startswith("\\!")]
-                            mask_not = ~series.str.contains("|".join(must_not), case=False, na=False) if must_not else True
-                            mask_yes = series.str.contains("|".join(must_yes), case=False, na=False) if must_yes else True
-                            submask = mask_not & mask_yes
-                    elif v.startswith("!"):
-                        submask = ~series.str.contains(re.escape(v[1:]), case=False, na=False)
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("!"):
+                        keyword = re.escape(part[1:])
+                        submasks.append(~series.str.contains(keyword, case=False, na=False))
                     else:
-                        submask = series.str.contains(re.escape(v), case=False, na=False)
-                    submasks.append(submask)
-                mask = pd.concat(submasks, axis=1).all(axis=1)
-            else:
-                if val.startswith("!"):
-                    mask = ~series.str.contains(re.escape(val[1:]), case=False, na=False)
+                        keyword = re.escape(part)
+                        submasks.append(series.str.contains(keyword, case=False, na=False))
+                return pd.concat(submasks, axis=1).any(axis=1)
+
+            def parse_expression(expr):
+                """Parse full expression like '(A|B)+(C|!D)' or just 'A|B' """
+                expr = expr.strip()
+                if '+' in expr:
+                    # Split by top-level + only, respecting parentheses
+                    parts = []
+                    current = ""
+                    depth = 0
+                    for c in expr:
+                        if c == '(':
+                            depth += 1
+                        elif c == ')':
+                            depth -= 1
+                        if c == '+' and depth == 0:
+                            parts.append(current.strip())
+                            current = ""
+                        else:
+                            current += c
+                    parts.append(current.strip())
+                    submasks = []
+                    for part in parts:
+                        submasks.append(parse_expression(part))
+                    return pd.concat(submasks, axis=1).all(axis=1)
                 else:
-                    mask = series.str.contains(re.escape(val), case=False, na=False)
-        
+                    # Single group or expression: remove parentheses
+                    group = expr
+                    if group.startswith("(") and group.endswith(")"):
+                        group = group[1:-1]
+                    return eval_or_group(group)
+
+            try:
+                mask = parse_expression(val)
+                logging.info(f"🔍 Evaluated expression: {val}")
+                print(f"🔍 Evaluated expression: {val}")
+            except Exception as e:
+                logging.warning(f"❌ Parsing error: {e}")
+                continue
+
            
         elif match_type == "equals":
             mask = series == val
@@ -635,6 +657,43 @@ with col2:
 
 
 project_name = st.selectbox("", ["Pilih Project"] + df_project_list["Project Name"].dropna().tolist())
+
+# === DEBUG AREA UNTUK TESTING RULES MANUAL ===
+DEBUG_MODE = False  # Ubah ke False atau comment saat production
+
+if DEBUG_MODE and project_name != "Pilih Project":
+    st.markdown("---")
+    st.markdown("### 🧪 Debug Rule Testing (Developer Only)")
+    test_content = st.text_area("✍️ Masukkan contoh isi konten untuk testing:")
+
+    if st.button("🔍 Tes Rules untuk Konten Ini"):
+        # Ambil rules sesuai project
+        rules_default = df_rules[df_rules["Project"] == "Default"]
+        rules_project = df_rules[df_rules["Project"] == project_name] if project_name in df_rules["Project"].values else pd.DataFrame()
+        rules_combined = pd.concat([rules_default, rules_project], ignore_index=True)
+
+        # Simulasi single row DataFrame
+        df_test = pd.DataFrame([{
+            "Channel": "instagram",  # bisa kamu buat dropdown juga
+            "Content": test_content,
+            "Title": "",
+            "Campaigns": project_name,
+            "Verified Account": "No",
+            "Media Name": "",
+            "Followers": 0,
+            "Author": "testauthor"
+        }])
+
+        # Apply rules
+        df_test, _ = apply_rules(df_test, rules_combined, output_column="Noise Tag", source_output_column="Output Noise Tag")
+        df_test, _ = apply_rules(df_test, rules_combined, output_column="Issue", source_output_column="Output Issue")
+        df_test, _ = apply_rules(df_test, rules_combined, output_column="Sub Issue", source_output_column="Output Sub Issue")
+
+        st.success("✅ Hasil Evaluasi Rules:")
+        st.write(f"**Noise Tag**: {df_test.at[0, 'Noise Tag']}")
+        st.write(f"**Issue**: {df_test.at[0, 'Issue']}")
+        st.write(f"**Sub Issue**: {df_test.at[0, 'Sub Issue']}")
+
 
 uploaded_raw = st.file_uploader("Upload Raw Data", type=["xlsx"], key="raw")
 
