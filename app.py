@@ -787,11 +787,7 @@ if submit:
                 # Jika kolom sudah ada, isi semua nilai kosong / NaN dengan default
                 df_processed[col] = df_processed[col].fillna("").replace("", default)
 
-        # Apply Official Account Logic dari setup sheet
-        df_processed = apply_official_account_logic(df_processed, df_official_account_setup, project_name)
-
-        # apply_official_account_logic
-        update_progress(2, 6, "🔍 Menerapkan Official Account")
+        
 
 
         # Bersihkan trailing .0 hanya untuk kolom 'Noise Tag' jika diperlukan
@@ -841,11 +837,18 @@ if submit:
         summary_combined = pd.concat([summary_df, summary_df_issue, summary_df_sub_issue], ignore_index=True)
 
         # apply_rules
-        update_progress(3, 6, "⚙️ Menjalankan Rules")
+        update_progress(2, 6, "⚙️ Menjalankan Rules")
 
         # === Hitung kolom Followers ===
         if "Original Reach" in df_processed.columns and "Potential Reach" in df_processed.columns:
             df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
+
+
+        # Apply Official Account Logic dari setup sheet
+        df_processed = apply_official_account_logic(df_processed, df_official_account_setup, project_name)
+
+        # apply_official_account_logic
+        update_progress(3, 6, "🔍 Menerapkan Official Account")
 
 
         # hitung followers dan media tier
