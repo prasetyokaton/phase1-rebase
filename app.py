@@ -180,10 +180,11 @@ def apply_creator_type_logic(df):
                     df.at[idx, "Creator Type"] = "KOL Macro"
                 elif followers > 10_000:
                     df.at[idx, "Creator Type"] = "KOL Micro"
-                elif followers > 1_000:
-                    df.at[idx, "Creator Type"] = "KOL Nano"
+                #elif followers > 1_000:
                 else:
-                    df.at[idx, "Creator Type"] = "KOL Micro Nano"
+                    df.at[idx, "Creator Type"] = "KOL Nano"
+                #else:
+                #    df.at[idx, "Creator Type"] = "KOL Micro Nano"
 
     except Exception as e:
         st.error(f"❌ Gagal memproses Creator Type: {e}")
@@ -616,6 +617,93 @@ def apply_official_account_logic(df, setup_df, project_name):
 
     return df
 
+
+# --- Helper: pilih URL sumber sesuai channel -------------
+def _pick_source_url(row):
+    ch = (row.get("Channel") or "").strip().lower()
+    if ch == "youtube":
+        return row.get("Channel URL", "")      # prioritas channel URL
+    else:
+        return row.get("Link URL", "")         # default: Link URL
+
+
+def _extract_username(link: str, channel: str) -> str:
+    link = (link or "").lower()
+
+    patterns = {
+        # 1) anything between /@ and the next “/”
+        "tiktok"  : r"tiktok\.com/@([^/?#]+)",
+        # 2) anything after twitter.com/ until next “/”
+        "twitter" : r"twitter\.com/([^/?#]+)",
+        # 3) handle /channel/xxxx , /@handle , /user/xxxx
+        "youtube" : r"youtube\.com/(?:channel/|@|user/)([^/?#]+)",
+    }
+    pat = patterns.get(channel.lower())
+    if not pat:
+        return ""
+
+    m = re.search(pat, link)
+    return m.group(1) if m else ""
+
+
+def apply_official_account_logic_v2(df, setup_df, project_name):
+    """
+    • TikTok / Twitter / YouTube  ➜ match by username extracted from URL
+    • Instagram / Facebook       ➜ match by Author + Verified Account filter
+    Returns dataframe with Official Account + Noise Tag updated.
+    """
+    setup_df = setup_df.copy()
+    setup_df.columns = setup_df.columns.str.strip()
+
+    # ↓ keep only rules for this project
+    setup_project = setup_df[setup_df["Project"] == project_name]
+
+    # --- Normalise verified flag in sheet to 'yes'/'no'
+    setup_project["Verified Account"] = setup_project["Verified Account"].apply(
+        lambda x: "yes" if str(x).strip().lower() in ["true", "yes", "1"] else "no"
+    )
+
+    # Pre-compute username column once  ← pakai helper baru
+    if "Username" not in df.columns:
+        df["Username"] = df.apply(
+            lambda r: _extract_username(
+                _pick_source_url(r),               # ← ganti 1 baris ini
+                r.get("Channel", "")
+            ),
+            axis=1
+        ).str.strip().str.lower()
+
+
+    # Iterate over rules
+    for _, rule in setup_project.iterrows():
+        channel   = str(rule.get("Channel", "")).strip().lower()
+        verified  = str(rule.get("Verified Account", "")).strip().lower()   # 'yes' / 'no'
+        target    = str(rule.get("Matching Value", "")).strip().lower()     # official username / author
+        if not channel or not target:
+            continue
+
+        # --- Build filter mask per channel ----------
+        chan_mask = df["Channel"].astype(str).str.strip().str.lower() == channel
+
+        if channel in ["instagram", "facebook"]:
+            # use Author + verified check
+            col_match = df["Author"].astype(str).str.strip().str.lower() == target
+            ver_mask  = df["Verified Account"].astype(str).str.strip().str.lower() == verified
+            mask = chan_mask & ver_mask & col_match
+        elif channel in ["tiktok", "twitter", "youtube"]:
+            col_match = df["Username"] == target
+            mask = chan_mask & col_match
+        else:
+            continue  # unsupported channel
+
+        # --- Apply flags when matched ---------------
+        df.loc[mask, "Official Account"] = "Official Account"
+        df.loc[mask, "Noise Tag"]        = "1"
+
+    return df
+
+
+
 #def bar progress
 def update_progress(step, total_steps, description):
     percent = int((step / total_steps) * 100)
@@ -738,8 +826,8 @@ if submit:
         logging.info(f"📎 Uploaded File: {uploaded_raw.name}")
 
         #Load data berhasil
-        update_progress(1, 6, "📁 File Loaded Successfully")
-
+        update_progress(1, 14, "📁 Load File ..")
+        time.sleep(1)
         start_time = time.time()
 
         df_raw = pd.read_excel(uploaded_raw, sheet_name=0)
@@ -754,6 +842,9 @@ if submit:
             after_count = len(df_processed)
             st.info(f"🔁 Removed {before_count - after_count} duplicate rows based on 'Link URL'")
 
+        #Standardize Verified Account
+        update_progress(2, 14, "📁 Standardize Verified Account ..")
+        time.sleep(1)
         # Standardize Verified Account
         if "Verified Account" in df_processed.columns:
             df_processed["Verified Account"] = (
@@ -762,7 +853,31 @@ if submit:
             df_processed["Verified Account"] = df_processed["Verified Account"].apply(lambda x: "Yes" if x == "yes" else "No")
 
 
+
+        #Create kolom hashtag
+        update_progress(3, 14, "📁 Finding Hashtag ..")
+        time.sleep(1)
+        # === Tambah kolom Hashtag ===
+        if "Hashtag" not in df_processed.columns:
+            # Sisipkan setelah kolom Content jika ada
+            insert_at = (
+                df_processed.columns.get_loc("Content") + 1
+                if "Content" in df_processed.columns
+                else len(df_processed.columns)
+            )
+            df_processed.insert(loc=insert_at, column="Hashtag", value="")
+
+        df_processed["Hashtag"] = (
+            df_processed["Content"]
+            .astype(str)
+            .str.findall(r"#\w+")
+            .apply(lambda tags: "|".join(tags))
+        )
+
+
         # Setup Columns
+        update_progress(4, 14, "📁 Setup Columns ..")
+        time.sleep(1)
         # df_column_setup sudah diambil dari google_sheet_data (lihat langkah 1)
         column_setup_default = df_column_setup[df_column_setup["Project"] == "Default"]
         column_setup_project = df_column_setup[df_column_setup["Project"] == project_name]
@@ -799,14 +914,20 @@ if submit:
             except Exception as e:
                 st.warning(f"⚠️ Gagal membersihkan kolom 'Noise Tag': {e}")
 
+
+        # Load Rules
+        update_progress(5, 14, "📁 Load Rules ..")
+        time.sleep(1)
         # === Apply Rules ===
         rules_default = df_rules[df_rules["Project"] == "Default"]
         rules_project = df_rules[df_rules["Project"] == project_name] if project_name in df_rules["Project"].values else pd.DataFrame()
 
         rules_combined = pd.concat([rules_default, rules_project], ignore_index=True)
         print(f"⚠️ rules_combined: {rules_combined}")
-                
+
+
         # Apply untuk Noise Tag
+        update_progress(6, 14, "⚙️ Apply Rules Noise Tag ..")
         df_processed, summary_df = apply_rules(
             df=df_processed,
             rules=rules_combined,
@@ -818,6 +939,7 @@ if submit:
         #df_processed = fill_gender(df_processed)
 
         # Tambahkan ini untuk Issue
+        update_progress(7, 14, "⚙️ Apply Rules Issue ..")
         df_processed, summary_df_issue = apply_rules(
             df=df_processed,
             rules=rules_combined,
@@ -825,6 +947,7 @@ if submit:
             source_output_column="Output Issue"
         )
 
+        update_progress(8, 14, "⚙️ Apply Rules Sub Issue ..")
         df_processed, summary_df_sub_issue = apply_rules(
             df=df_processed,
             rules=rules_combined,
@@ -836,26 +959,28 @@ if submit:
         # Gabungkan summary Noise Tag + Issue + Sub Issue
         summary_combined = pd.concat([summary_df, summary_df_issue, summary_df_sub_issue], ignore_index=True)
 
-        # apply_rules
-        update_progress(2, 6, "⚙️ Menjalankan Rules")
-
+        # hitung followers
+        update_progress(9, 14, "⚙️ Count Followers ..")
+        time.sleep(1)
         # === Hitung kolom Followers ===
         if "Original Reach" in df_processed.columns and "Potential Reach" in df_processed.columns:
             df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
 
 
         # Apply Official Account Logic dari setup sheet
-        df_processed = apply_official_account_logic(df_processed, df_official_account_setup, project_name)
-
-        # apply_official_account_logic
-        update_progress(3, 6, "🔍 Menerapkan Official Account")
-
-
-        # hitung followers dan media tier
-        update_progress(4, 6, "🧠 Menghitung Followers & Media Tier")
+        #df_processed = apply_official_account_logic(df_processed, df_official_account_setup, project_name)
+        # Baru ― v2
+        # Apply Official Accoun
+        update_progress(10, 14, "⚙️ Apply Official Account ..")
+        time.sleep(1)
+        df_processed = apply_official_account_logic_v2(df_processed, df_official_account_setup, project_name)
 
         #st.write("🔍 DEBUG - cek nilai df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
         
+
+        # Load Rules
+        update_progress(11, 14, "⚙️ Apply Official Account ..")
+        time.sleep(1)
         # Apply Media Tier if checked
         if apply_media_tier:
             # Apply Media Tier logic
@@ -866,6 +991,11 @@ if submit:
 
         #st.write("🔍 DEBUG after media tier - cek nilai df_processed.columns:", list(df_processed.columns) if df_processed is not None else "df_processed is None")
         
+
+        # Load Rules
+        update_progress(12, 14, "⚙️ Apply Creator Type, Media Tier, Column Order and Affected Rules ..")
+        time.sleep(1)
+
         # Pastikan Creator Type juga ditampilkan (tidak di-hide)
         if "Creator Type" in df_column_order["Column Name"].values:
             creator_type_row = df_column_order[df_column_order["Column Name"] == "Creator Type"]
@@ -896,22 +1026,28 @@ if submit:
                 final_cols.append("Rules Affected")
             if "Rules Affected Words" not in final_cols:
                 final_cols.append("Rules Affected Words")
-
-
-
         
         if "Creator Type" not in final_cols and "Creator Type" in df_processed.columns:
             final_cols.append("Creator Type")
 
+        # --- sisipkan kolom Hashtag di output tepat setelah "Sub Issue"
+        if "Hashtag" in df_processed.columns and "Hashtag" not in final_cols:
+            if "Sub Issue" in final_cols:
+                insert_at = final_cols.index("Sub Issue") + 1
+                final_cols.insert(insert_at, "Hashtag")
+            else:
+                final_cols.append("Hashtag")
+
         df_final = df_processed[final_cols]
 
+
         # simpan ke output_buffer
-        update_progress(5, 6, "📊 Menyusun hasil & export")
+        update_progress(13, 14, "📊 Prepare file ..")
 
         # Save Output
         tanggal_hari_ini = datetime.now().strftime("%Y-%m-%d")
-        output_filename = f"{project_name}_{tanggal_hari_ini}.xlsx"
-
+        #output_filename = f"{project_name}_{tanggal_hari_ini}.xlsx"
+        output_filename = f"{Path(uploaded_raw.name).stem}_phase1.xlsx"
         if not keep_raw_data and (df_final is None or df_final.empty):
             st.error("❌ Tidak ada data yang bisa disimpan. Hasil kosong dan tidak memilih simpan RAW data.")
         else:
@@ -958,7 +1094,7 @@ if submit:
         st.session_state["process_duration"] = f"{int(hours)} jam {int(minutes)} menit {int(seconds)} detik"
 
         #Finish
-        update_progress(6, 6, "✅ Proses selesai")
+        update_progress(14, 14, "✅ Process Completed.")
 
 
 
