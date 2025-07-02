@@ -12,7 +12,9 @@ from pathlib import Path
 import os
 import logging
 from pytz import timezone
-
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
+from openpyxl.styles import Alignment
 
 # Load the model and vectorizer for gender prediction
 class GenderPredictor:
@@ -54,7 +56,8 @@ def load_google_sheets_data():
         "df_method_1_keyword": pd.DataFrame(spreadsheet.worksheet("Method 1 Keyword").get_all_records()),
         "df_method_selection": pd.DataFrame(spreadsheet.worksheet("Method Selection").get_all_records()),
         "df_official_account_setup": pd.DataFrame(spreadsheet.worksheet("Official Account Setup").get_all_records()),
-        "last_updated": spreadsheet.worksheet("NOTES").cell(1, 2).value
+        "last_updated": spreadsheet.worksheet("NOTES").cell(1, 2).value,
+        "df_hashtag_priority" : pd.DataFrame(spreadsheet.worksheet("Hashtag Priority").get_all_records())
     }
     return data
 
@@ -614,6 +617,7 @@ def apply_official_account_logic(df, setup_df, project_name):
 
         df.loc[mask, "Official Account"] = "Official Account"
         df.loc[mask, "Noise Tag"] = "1"
+        df.loc[mask, "Sentiment"] = "positive" #ganti semua sentiment OA jadi positive
 
     return df
 
@@ -699,6 +703,7 @@ def apply_official_account_logic_v2(df, setup_df, project_name):
         # --- Apply flags when matched ---------------
         df.loc[mask, "Official Account"] = "Official Account"
         df.loc[mask, "Noise Tag"]        = "1"
+        df.loc[mask, "Sentiment"] = "positive" #ganti semua sentiment OA jadi positive
 
     return df
 
@@ -709,6 +714,31 @@ def update_progress(step, total_steps, description):
     percent = int((step / total_steps) * 100)
     progress.progress(percent)
     status_text.text(f"{description} ({percent}%)")
+
+
+# Function to process and fill Hashtag Priority
+def assign_hashtag_priority(df, df_hp, project_name):
+    # Ambil rule untuk project
+    hp_df = (
+        df_hp
+        .assign(Hashtag=lambda d: d["Hashtag"].str.strip())   # buang spasi
+        .query("Project == @project_name")
+    )
+    if hp_df.empty:
+        return df
+
+    for idx, row in df.iterrows():
+        hashtags = str(row.get("Hashtag", "")).lower().split("|")
+        best = (
+            hp_df[hp_df["Hashtag"].str.lower().isin(hashtags)]
+            .sort_values("Priority")          # kecil = prioritas tinggi
+            .head(1)
+        )
+        df.at[idx, "Hashtag Priority"] = (
+            best["Hashtag"].iloc[0] if not best.empty else ""
+        )
+    return df
+
 
 
 # === MULAI STREAMLIT APP ===
@@ -875,6 +905,36 @@ if submit:
         )
 
 
+        # Memanggil fungsi untuk menetapkan Hashtag Priority
+        if "Hashtag" in df_processed.columns:
+            #df_processed = assign_hashtag_priority(df_processed, df_rules, project_name)
+            
+            df_processed = assign_hashtag_priority(
+                df_processed,
+                google_sheet_data["df_hashtag_priority"],
+                project_name
+            )
+
+        # Pastikan kolom "Hashtag Priority" berada setelah kolom "Hashtag"
+        if "Hashtag Priority" not in df_processed.columns:
+            df_processed["Hashtag Priority"] = ""
+
+        # Menyusun kolom agar "Hashtag" dan "Hashtag Priority" berada berdampingan
+        columns = list(df_processed.columns)
+        if "Hashtag" in columns and "Hashtag Priority" in columns:
+            hashtag_index = columns.index("Hashtag")
+            hashtag_priority_index = columns.index("Hashtag Priority")
+            
+            # Pastikan Hashtag Priority berada setelah Hashtag
+            if hashtag_index < hashtag_priority_index:
+                columns.insert(hashtag_index + 1, columns.pop(hashtag_priority_index))
+            else:
+                columns.insert(hashtag_index + 1, "Hashtag Priority")
+
+        df_processed = df_processed[columns]
+
+
+
         # Setup Columns
         update_progress(4, 14, "📁 Setup Columns ..")
         time.sleep(1)
@@ -1038,7 +1098,38 @@ if submit:
             else:
                 final_cols.append("Hashtag")
 
+        #df_final = df_processed[final_cols] sekali saja setelah hashtag priorty
+
+
+
+
+        # Pastikan kolom "Hashtag Priority" berada setelah kolom "Hashtag"
+        if "Hashtag" in df_processed.columns and "Hashtag Priority" in df_processed.columns:
+            hashtag_index = df_processed.columns.get_loc("Hashtag")
+            hashtag_priority_index = df_processed.columns.get_loc("Hashtag Priority")
+            
+            # Pastikan Hashtag Priority berada setelah Hashtag
+            if hashtag_index < hashtag_priority_index:
+                columns.insert(hashtag_index + 1, columns.pop(hashtag_priority_index))
+            else:
+                columns.insert(hashtag_index + 1, "Hashtag Priority")
+
+        # Update final_cols with "Hashtag Priority" if necessary
+        if "Hashtag Priority" not in final_cols and "Hashtag Priority" in df_processed.columns:
+            final_cols.append("Hashtag Priority")
+
+        # --- Sisipkan Hashtag Priority setelah Hashtag di final_cols
+        if "Hashtag" in final_cols and "Hashtag Priority" in final_cols:
+            final_cols.remove("Hashtag Priority")
+            hashtag_index = final_cols.index("Hashtag")
+            final_cols.insert(hashtag_index + 1, "Hashtag Priority")
+
+
+        # Update final dataframe with the ordered columns
         df_final = df_processed[final_cols]
+
+
+
 
 
         # simpan ke output_buffer
@@ -1048,6 +1139,334 @@ if submit:
         tanggal_hari_ini = datetime.now().strftime("%Y-%m-%d")
         #output_filename = f"{project_name}_{tanggal_hari_ini}.xlsx"
         output_filename = f"{Path(uploaded_raw.name).stem}_phase1.xlsx"
+
+        # === BUILD Data Collection Overview =========================================
+        # === Buat Summary Data (Channel x Official Account) ===
+        df_summary_base = df_final.copy()
+
+        # Grouping by Channel and Official Account
+        summary_group = df_summary_base.groupby(["Channel", "Official Account"]).size().unstack(fill_value=0)
+
+        # Total official & non-official
+        total_official = summary_group.get("Official Account", pd.Series(dtype=int)).sum()
+        total_nonofficial = summary_group.get("Non Official Account", pd.Series(dtype=int)).sum()
+
+        # Buat struktur tabel summary
+        summary_table = []
+        for channel in summary_group.index:
+            official_count = summary_group.at[channel, "Official Account"] if "Official Account" in summary_group.columns else 0
+            nonofficial_count = summary_group.at[channel, "Non Official Account"] if "Non Official Account" in summary_group.columns else 0
+
+            official_pct = f"{official_count} ({official_count / total_official * 100:.2f}%)" if total_official > 0 else "0 (0.00%)"
+            nonofficial_pct = f"{nonofficial_count} ({nonofficial_count / total_nonofficial * 100:.2f}%)" if total_nonofficial > 0 else "0 (0.00%)"
+
+            summary_table.append({
+                "Data Source (Channel)": channel,
+                "Official Account": official_pct,
+                "Non-Official Account": nonofficial_pct
+            })
+
+        df_summary = pd.DataFrame(summary_table)
+        # --- Tambahkan baris Total di akhir tabel summary ---
+        total_row = {
+            "Data Source (Channel)": "Total",
+            "Official Account": total_official,          # hanya angka total
+            "Non-Official Account": total_nonofficial    # hanya angka total
+        }
+        df_summary = pd.concat([df_summary, pd.DataFrame([total_row])], ignore_index=True)
+
+
+
+        # === BUILD SHARE-OF-VOICE TABLE =========================================
+        campaigns = sorted(df_final["Campaigns"].dropna().unique())
+
+        # Flag OA / Non-OA
+        df_sov_base = df_final.copy()
+        df_sov_base["OA Flag"] = df_sov_base["Official Account"].apply(
+            lambda x: "Official Account"
+            if str(x).strip().lower() == "official account" else "Non Official Account"
+        )
+
+        # Pivot hitung jumlah
+        pivot = (
+            df_sov_base
+            .groupby(["Channel", "OA Flag", "Campaigns"])
+            .size()
+            .unstack(fill_value=0)          # kolom = Campaigns
+        )
+
+        # Total per campaign & OA
+        tot_off  = df_sov_base[df_sov_base["OA Flag"]=="Official Account"].groupby("Campaigns").size()
+        tot_non  = df_sov_base[df_sov_base["OA Flag"]=="Non Official Account"].groupby("Campaigns").size()
+
+        # Susun baris SOV
+        channel_order = [
+            "Twitter","Facebook","Instagram","TikTok","YouTube",
+            "Online Media","Printmedia","Forum","Blog","TV"
+        ]
+        rows = []
+        for ch in channel_order:
+            for flag in ["Official Account","Non Official Account"]:
+                if (ch, flag) not in pivot.index:
+                    counts = {c:0 for c in campaigns}
+                else:
+                    counts = pivot.loc[(ch,flag)].to_dict()
+
+                row = {
+                    "Channel": ch if flag=="Official Account" else "",    # baris kedua channel dikosongkan
+                    "Account Type": flag
+                }
+                for camp in campaigns:
+                    count = counts.get(camp, 0)
+                    denom = tot_off.get(camp,0) if flag=="Official Account" else tot_non.get(camp,0)
+                    pct   = f"{count/denom*100:.2f}%" if denom else "0.00%"
+                    row[camp] = f"{count} ({pct})"
+                rows.append(row)
+
+        df_sov = pd.DataFrame(rows)
+
+        # Pakai header kosong untuk G2-H2
+        df_sov.columns = ["", ""] + campaigns
+
+
+
+
+
+        ### --- TOP 10 AUTHOR BY BUZZ & BY POST ------------------------------
+        # GANTI seluruh blok pembuatan `top_post` di bawah ini
+
+        # 1) by Buzz ────────── (tetap sama)
+        top_buzz = (
+            df_final
+            .groupby("Author", as_index=False)
+            .agg({"Buzz": "sum",
+                    "Channel": "first",
+                    "Content": "first",
+                    "Link URL": "first",
+                    "Sentiment": "first"})   
+            .sort_values("Buzz", ascending=False)
+            .head(10)
+            .reset_index(drop=True)
+        )
+        top_buzz.insert(0, "Rank", top_buzz.index + 1)
+
+        # 2) by Post ──────────  ✅ perbaikan kolom
+        top_post = (
+            df_final
+            .groupby("Author", as_index=False)
+            .size()                         # hitung baris = total post
+            .rename(columns={"size": "Total Post"})
+            .sort_values("Total Post", ascending=False)
+            .head(10)
+            .reset_index(drop=True)
+        )
+        top_post.insert(0, "Rank", top_post.index + 1)
+
+
+
+        # ---------------------------------------------------------------
+        # === TOP 10 HASHTAG by Buzz & by Post ==========================
+        # ---------------------------------------------------------------
+        def _uniq_tags(tag_str):
+            """ubah '#a|#b|#a' → {'#a', '#b'}"""
+            tags = [t.strip() for t in str(tag_str).split("|") if t.strip()]
+            return set(tags)
+
+        # ── explode hashtag ke baris –
+        tags_df = (
+            df_final[["Hashtag", "Buzz"]]
+            .assign(Hashtag=lambda d: d["Hashtag"].apply(_uniq_tags))
+            .explode("Hashtag")
+            .dropna(subset=["Hashtag"])
+        )
+
+        # by Buzz
+        top_hash_buzz = (
+            tags_df
+            .groupby("Hashtag", as_index=False)["Buzz"].sum()
+            .rename(columns={"Buzz": "Total Buzz"})
+            .sort_values("Total Buzz", ascending=False)
+            .head(10)
+            .reset_index(drop=True)
+        )
+        top_hash_buzz.insert(0, "Rank", top_hash_buzz.index + 1)
+
+        # by Post
+        top_hash_post = (
+            tags_df[["Hashtag"]]
+            .value_counts()
+            .head(10)
+            .reset_index(name="Total Post")
+        )
+        top_hash_post.insert(0, "Rank", top_hash_post.index + 1)
+
+
+
+        # ---------------------------------------------------------------
+        # === SENTIMENT PERCENTAGE  &  TOP-POST POS / NEG  ===============   ### NEW
+        # ---------------------------------------------------------------
+        # Normalisasi nilai Sentiment → lower() untuk jaga-jaga
+        df_final["Sentiment"] = (
+            df_final["Sentiment"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        sent_counts = df_final["Sentiment"].value_counts()
+        total_sent  = sent_counts.sum()
+
+        sent_pct_rows = [
+            {
+                "Sentiment": label.capitalize(),
+                "Value":     f"{cnt} ({cnt/total_sent*100:.1f}%)"
+            }
+            for label, cnt in sent_counts.items()
+        ]
+        df_sent_pct = pd.DataFrame(sent_pct_rows)                       ### NEW
+
+        # ── TOP 10 POSITIVE / NEGATIVE by Buzz ─────────────────────────
+        #top_posbuzz = (
+        #    df_final[df_final["Sentiment"]=="positive"]
+        #    .sort_values("Buzz", ascending=False)
+        #    .head(10)
+        #    .loc[:, ["Author","Channel","Content","Link URL","Buzz"]]
+        #    .reset_index(drop=True)
+        #)
+        #top_posbuzz.insert(0, "No", top_posbuzz.index + 1)
+
+        
+
+        # === TOP 10 POSITIVE POST  (OA vs Non-OA) =====================
+        is_pos   = df_final["Sentiment"].str.lower().eq("positive")
+        is_oa    = df_final["Official Account"].str.strip().str.lower() == "official account"
+        is_nonoa = ~is_oa                                        # semua selain OA
+
+        def _top(df):
+            t = (
+                df.sort_values("Buzz", ascending=False)
+                .head(10)
+                .loc[:, ["Author", "Channel", "Content", "Link URL", "Buzz"]]
+                .reset_index(drop=True)
+            )
+            t.insert(0, "No", t.index + 1)
+            return t
+
+        top_posbuzz_oa   = _top(df_final[is_pos & is_oa])
+        top_posbuzz_nona = _top(df_final[is_pos & is_nonoa])
+
+
+        # === TOP 10 NEGATIVE POST ======
+        top_negbuzz = (
+            df_final[df_final["Sentiment"]=="negative"]
+            .sort_values("Buzz", ascending=False)
+            .head(10)
+            .loc[:, ["Author","Channel","Content","Link URL","Buzz"]]
+            .reset_index(drop=True)
+        )
+        top_negbuzz.insert(0, "No", top_negbuzz.index + 1)
+
+
+
+
+        # ---------------------------------------------------------------
+        # === TOP CONTENT BY BUZZ =======================================
+        # ---------------------------------------------------------------
+        top_content_buzz = (
+            df_final
+            .sort_values("Buzz", ascending=False)
+            .head(10)
+            .loc[:, ["Author", "Channel", "Content", "Link URL", "Buzz", "Sentiment"]]
+            .reset_index(drop=True)
+        )
+        top_content_buzz.insert(0, "No", top_content_buzz.index + 1)
+
+        # ---------------------------------------------------------------
+        # === TOP CAMPAIGNS PERFORMANCE ================================
+        # ---------------------------------------------------------------
+        perf_base = df_final.copy()
+        perf_base["OA Flag"] = perf_base["Official Account"].apply(
+            lambda x: "Official Account"
+            if str(x).strip().lower() == "official account" else "Non Official Account"
+        )
+
+        perf_tbl = (
+            perf_base
+            .groupby(["Channel", "OA Flag"])
+            .agg(Total_Engagement=("Engagement", "sum"),
+                Number_of_Post=("Engagement", "size"))
+            .reset_index()
+        )
+        perf_tbl["Avg. Engagement"] = (
+            perf_tbl["Total_Engagement"] / perf_tbl["Number_of_Post"]
+        ).round(2)
+
+        perf_tbl = perf_tbl.rename(columns={
+            "Channel": "Channel",
+            "OA Flag": "Account Type",
+            "Total_Engagement": "Total Engagement",
+            "Number_of_Post": "Number of Post"
+        })
+
+
+
+
+        ### --- POSISI BLOK DI SHEET SUMMARY ---------------------------------
+        summary_col_count = df_summary.shape[1]           # kolom blok Overview
+        sov_start_col     = summary_col_count + 2         # +2 kolom spasi
+
+        sov_col_letter    = get_column_letter(sov_start_col + 1)
+
+        # Blok Top-Author ditempatkan setelah SOV + 2 kolom spasi
+        top_buzz_start_col = sov_start_col + df_sov.shape[1] + 2
+        top_post_start_col = top_buzz_start_col + len(top_buzz.columns) + 2
+
+        buzz_col_letter = get_column_letter(top_buzz_start_col + 1)
+        post_col_letter = get_column_letter(top_post_start_col + 1)
+
+
+
+        # ----------------------------------------------------------------
+        # === Hitung start-col untuk blok hashtag (2 kolom spasi) ---------
+        # ----------------------------------------------------------------
+        top_hash_buzz_start_col = top_post_start_col + len(top_post.columns) + 2
+        top_hash_post_start_col = top_hash_buzz_start_col + len(top_hash_buzz.columns) + 2
+
+        hash_buzz_col_letter = get_column_letter(top_hash_buzz_start_col + 1)
+        hash_post_col_letter = get_column_letter(top_hash_post_start_col + 1)
+
+
+
+        # ----------------------------------------------------------------
+        # === Hitung start-col untuk blok Sentiment & Top-Post  =========   ### NEW
+        # ----------------------------------------------------------------
+        sent_start_col        = top_hash_post_start_col + len(top_hash_post.columns) + 2
+        posbuzz_oa_start_col  = sent_start_col        + df_sent_pct.shape[1]         + 2
+        posbuzz_nona_start_col= posbuzz_oa_start_col  + len(top_posbuzz_oa.columns)  + 2
+        negbuzz_start_col     = posbuzz_nona_start_col+ len(top_posbuzz_nona.columns)+ 2
+
+        sent_col_letter      = get_column_letter(sent_start_col + 1)
+
+        posbuzz_oa_col_letter   = get_column_letter(posbuzz_oa_start_col   + 1)
+        posbuzz_nona_col_letter = get_column_letter(posbuzz_nona_start_col + 1)
+        negbuzz_col_letter      = get_column_letter(negbuzz_start_col      + 1)
+
+
+
+
+        # ----------------------------------------------------------------
+        # === Hitung start-col untuk top content dan top campaigns performance  =========   ### NEW
+        # ----------------------------------------------------------------
+        top_content_start_col   = negbuzz_start_col + len(top_negbuzz.columns) + 2
+        perf_start_col          = top_content_start_col + len(top_content_buzz.columns) + 2
+
+        content_col_letter = get_column_letter(top_content_start_col + 1)
+        perf_col_letter    = get_column_letter(perf_start_col + 1)
+
+        
+
+
+
         if not keep_raw_data and (df_final is None or df_final.empty):
             st.error("❌ Tidak ada data yang bisa disimpan. Hasil kosong dan tidak memilih simpan RAW data.")
         else:
@@ -1056,6 +1475,136 @@ if submit:
                     df_raw.to_excel(writer, sheet_name="RAW Data", index=False)
                 if df_final is not None and not df_final.empty:
                     df_final.to_excel(writer, sheet_name="Process Data", index=False)
+                if df_summary is not None and not df_summary.empty:
+                    # Tambahkan sheet "Summary" di posisi kanan (terakhir)
+                    df_summary.to_excel(writer, sheet_name="Summary", index=False, startrow=1, startcol=1)
+                    # --- tulis Share Of Voice ---
+                    df_sov.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False,
+                        startrow=1,           # baris 2 (row-index 1) → data
+                        startcol=sov_start_col
+                    )
+
+
+                    # --- tulis tabel Top 10 Author -----------------------------------
+                    top_buzz.to_excel(writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=top_buzz_start_col)
+
+                    top_post.to_excel(writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=top_post_start_col)
+                    
+                    # --- tulis Top Hashtag -----------------------------------------
+                    top_hash_buzz.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=top_hash_buzz_start_col
+                    )
+                    top_hash_post.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=top_hash_post_start_col
+                    )
+
+
+                    # --- tulis Sentiment Percentage --------------------------------      ### NEW
+                    df_sent_pct.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=sent_start_col
+                    )
+
+                    # --- tulis Top 10 Positive & Negative Post by Buzz -------------      ### NEW
+                    top_posbuzz_oa.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=posbuzz_oa_start_col
+                    )
+                    top_posbuzz_nona.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=posbuzz_nona_start_col
+                    )
+                    top_negbuzz.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=negbuzz_start_col
+                    )
+
+
+                    # --- tulis Top Content by Buzz ----------------------------------
+                    top_content_buzz.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=top_content_start_col
+                    )
+
+                    # --- tulis Top Campaigns Performance ----------------------------
+                    perf_tbl.to_excel(
+                        writer, sheet_name="Summary",
+                        index=False, startrow=1, startcol=perf_start_col
+                    )
+
+
+
+                    # =========================================================
+                    # ===  AFTER WRITING  :  formatting via openpyxl
+                    # =========================================================
+                    wb = writer.book
+                    ws = wb["Summary"]
+
+                    bold = Font(bold=True)
+
+                    # Judul blok
+                    ws["B1"].value              = "Data Collection Overview"
+                    ws["B1"].font               = bold
+
+                    ws[f"{sov_col_letter}1"].value = "Share Of Voice"
+                    ws[f"{sov_col_letter}1"].font  = bold
+
+                    ws[f"{buzz_col_letter}1"].value = "Top 10 Author by Buzz"
+                    ws[f"{buzz_col_letter}1"].font  = bold
+
+                    ws[f"{post_col_letter}1"].value = "Top 10 Author by Post"
+                    ws[f"{post_col_letter}1"].font  = bold
+
+                    # Judul tabel hashtag
+                    ws[f"{hash_buzz_col_letter}1"] = "Top Hashtag by Buzz"
+                    ws[f"{hash_buzz_col_letter}1"].font = bold
+
+                    ws[f"{hash_post_col_letter}1"] = "Top Hashtag by Post"
+                    ws[f"{hash_post_col_letter}1"].font = bold
+
+
+                    # Judul blok Sentiment & Top-Post                                  ### NEW
+                    ws[f"{sent_col_letter}1"]   = "Sentiment Percentage"
+                    ws[f"{sent_col_letter}1"].font = bold
+
+                    ws[f"{posbuzz_oa_col_letter}1"]   = "Top 10 Post Positive by Buzz (Official Account)"
+                    ws[f"{posbuzz_nona_col_letter}1"] = "Top 10 Post Positive by Buzz (Non Official Account)"
+                    ws[f"{negbuzz_col_letter}1"]      = "Top 10 Post Negative by Buzz"
+
+                    # Bold semua
+                    for cell in [f"{posbuzz_oa_col_letter}1", f"{posbuzz_nona_col_letter}1", f"{negbuzz_col_letter}1"]:
+                        ws[cell].font = bold
+
+
+                    ws[f"{content_col_letter}1"] = "Top Content by Buzz"
+                    ws[f"{content_col_letter}1"].font = bold
+
+                    ws[f"{perf_col_letter}1"] = "Top Campaigns Performance"
+                    ws[f"{perf_col_letter}1"].font = bold
+
+
+
+                    # === AUTO-FIT width semua kolom di sheet Summary ====================
+                    MAX_CHAR_WIDTH = 82.33  # Excel column width ≈ 500px
+
+                    for col_cells in ws.columns:
+                        max_len = 0
+                        col_letter = col_cells[0].column_letter
+                        for c in col_cells:
+                            if c.value is not None:
+                                max_len = max(max_len, len(str(c.value)))
+                                # pastikan alignment tidak wrap
+                                c.alignment = Alignment(wrap_text=False)
+                        # Set column width dengan batas maksimum
+                        ws.column_dimensions[col_letter].width = min(max_len + 2, MAX_CHAR_WIDTH)
+
+
 
         # Simpan nama file ke session state agar bisa diakses oleh tombol download
         st.session_state["download_filename"] = output_filename
