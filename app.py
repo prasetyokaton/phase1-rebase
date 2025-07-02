@@ -16,6 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
 from openpyxl.styles import Alignment
 
+
 # Load the model and vectorizer for gender prediction
 class GenderPredictor:
     def __init__(self):
@@ -279,6 +280,7 @@ def apply_media_tier_logic(df):
                     else:
                         df.at[index, "Media Tier"] = 3
                 except:
+                    logging.warning(f"Error parsing ad_value '{ad_value}': {e}")
                     continue  # jika ad_value tidak bisa dikonversi, skip
         return df
     
