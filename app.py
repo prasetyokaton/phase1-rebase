@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime
-import requests
-from io import BytesIO
 import joblib
 import re
 import gspread
@@ -15,6 +13,11 @@ from pytz import timezone
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
 from openpyxl.styles import Alignment
+from column_setup_config import COLUMN_SETUP_CONFIG
+from column_order_config import COLUMN_ORDER_CONFIG
+
+
+
 
 
 # Load the model and vectorizer for gender prediction
@@ -33,7 +36,7 @@ class GenderPredictor:
         return self.labels[result], round(proba * 100, 2)
 
 
-@st.cache_resource(ttl=3600) #Cache berlaku selama 5 menit
+@st.cache_resource(ttl=3600) #Cache berlaku selama 1 jam menit
 def load_google_sheets_data():
     #this apply for local
     #if os.path.exists('/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'):
@@ -51,7 +54,7 @@ def load_google_sheets_data():
 
     data = {
         "df_project_list": pd.DataFrame(spreadsheet.worksheet("Project List").get_all_records()),
-        "df_column_setup": pd.DataFrame(spreadsheet.worksheet("Column Setup").get_all_records()),
+        #"df_column_setup": pd.DataFrame(spreadsheet.worksheet("Column Setup").get_all_records()),
         "df_rules": pd.DataFrame(spreadsheet.worksheet("Rules").get_all_records()),
         "df_column_order": pd.DataFrame(spreadsheet.worksheet("Column Order Setup").get_all_records()),
         "df_method_1_keyword": pd.DataFrame(spreadsheet.worksheet("Method 1 Keyword").get_all_records()),
@@ -267,7 +270,9 @@ def apply_media_tier_logic(df):
         # STEP 3: isi berdasarkan Ad Value
         for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
             media_name = str(row["Media Name"]).strip()
-            ad_value = row.get("Ad Value")
+            #ad_value = row.get("Ad Value")
+            raw_val = row.get("Ad Value")
+            ad_value  = to_float(raw_val)
 
             # Hanya proses jika media_name dan ad_value tidak kosong
             if media_name and media_name.strip() != "" and pd.notna(ad_value):
@@ -279,7 +284,7 @@ def apply_media_tier_logic(df):
                         df.at[index, "Media Tier"] = 2
                     else:
                         df.at[index, "Media Tier"] = 3
-                except:
+                except Exception as e:
                     logging.warning(f"Error parsing ad_value '{ad_value}': {e}")
                     continue  # jika ad_value tidak bisa dikonversi, skip
         return df
@@ -294,32 +299,28 @@ def clean_filename(text):
     return re.sub(r"[^\w\-]", "_", str(text).strip())
 
 def init_logging(project_name, uploaded_filename):
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    log_dir = Path("logs"); log_dir.mkdir(exist_ok=True)
 
-    # ✅ Tambahkan timezone Jakarta
     wib = timezone("Asia/Jakarta")
     timestamp = datetime.now(wib).strftime("%Y%m%d_%H%M%S")
 
-    project_clean = clean_filename(project_name or "unknownproject")
-    file_clean = clean_filename(uploaded_filename or "nofile")
-
-    log_filename = f"{timestamp}_{project_clean}_{file_clean}.log"
+    log_filename = f"{timestamp}_{clean_filename(project_name)}_{clean_filename(uploaded_filename)}.log"
     log_path = log_dir / log_filename
 
-    # Setup logging
-    logger = logging.getLogger()
+    # Gunakan logger khusus modul
+    logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
 
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-
-    file_handler = logging.FileHandler(log_path, mode='w')
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(file_handler)
+    # Tambah handler **hanya jika belum ada FileHandler** agar tidak dobel saat rerun
+    if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
+        fh = logging.FileHandler(log_path, mode="w")
+        fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
 
     logger.info("🚀 Streamlit app started")
     return log_filename
+
 
 
 
@@ -742,6 +743,12 @@ def assign_hashtag_priority(df, df_hp, project_name):
     return df
 
 
+#jagain untuk float tidak ada koma atau titik
+def to_float(val):
+    """Konversi '18,000,000' / '18.000.000' / 18000000 → 18000000.0"""
+    s = re.sub(r"[^\d]", "", str(val))      # buang selain angka 0-9
+    return float(s) if s else None
+
 
 # === MULAI STREAMLIT APP ===
 st.title("Insight Automation Phase 1")
@@ -753,13 +760,19 @@ if google_sheet_data is None:
     st.stop()
 
 df_project_list = google_sheet_data["df_project_list"]
-df_column_setup = google_sheet_data["df_column_setup"]
+#df_column_setup = google_sheet_data["df_column_setup"] => tidak terpakai karena tidak lagi ambil dari google sheet
 df_rules = google_sheet_data["df_rules"]
-df_column_order = google_sheet_data["df_column_order"]
+#df_column_order = google_sheet_data["df_column_order"]
 df_method_1_keyword = google_sheet_data["df_method_1_keyword"]
 df_method_selection = google_sheet_data["df_method_selection"]
 df_official_account_setup = google_sheet_data["df_official_account_setup"]
 last_updated = google_sheet_data["last_updated"]
+
+#====== SUDAH DENGAN AMBIL DARI FILE =========
+# NEW – pull from local config
+column_setup_df = pd.DataFrame(COLUMN_SETUP_CONFIG)
+df_column_order = pd.DataFrame(COLUMN_ORDER_CONFIG)
+
 
 
 
@@ -940,11 +953,24 @@ if submit:
         # Setup Columns
         update_progress(4, 14, "📁 Setup Columns ..")
         time.sleep(1)
+        
+        #==== sudah tidak terpakai karena tidak ambil dari google sheet lagi"
         # df_column_setup sudah diambil dari google_sheet_data (lihat langkah 1)
-        column_setup_default = df_column_setup[df_column_setup["Project"] == "Default"]
-        column_setup_project = df_column_setup[df_column_setup["Project"] == project_name]
+        #column_setup_default = df_column_setup[df_column_setup["Project"] == "Default"]
+        #column_setup_project = df_column_setup[df_column_setup["Project"] == project_name]
 
-        column_setup_combined = pd.concat([column_setup_default, column_setup_project], ignore_index=True)
+        #column_setup_combined = pd.concat([column_setup_default, column_setup_project], ignore_index=True)
+
+        
+
+        # Default + (optional) project-specific rows
+        column_setup_combined = pd.concat([
+            column_setup_df[column_setup_df["Project"] == "Default"],
+            column_setup_df[column_setup_df["Project"] == project_name]
+        ]).reset_index(drop=True)
+
+
+
 
         for _, row in column_setup_combined.iterrows():
             col = row["Target Column"]
