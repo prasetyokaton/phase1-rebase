@@ -514,8 +514,16 @@ def apply_rules(df, rules, output_column, source_output_column):
 
                 df.loc[update_condition, colname] = out_val
                 priority_tracker[colname].loc[update_condition] = priority
+                #for idx in update_condition[update_condition].index:
+                #    overwrite_tracker[idx].append(f"{colname} P{priority}: {out_val}")
+                    
                 for idx in update_condition[update_condition].index:
-                    overwrite_tracker[idx].append(f"{colname} P{priority}: {out_val}")
+                    matched_kw = _extract_first_match(series.at[idx], val)
+                    overwrite_tracker[idx].append(
+                        f"{colname} P{priority}: {out_val} ({matched_kw})"
+                    )
+
+
 
         tmp_update_mask_sum = 0
         # Log per Output Column
@@ -544,28 +552,50 @@ def apply_rules(df, rules, output_column, source_output_column):
 
 
     # Tambahkan Rules Affected & Rules Affected Words hanya untuk Noise Tag
+    #if output_column == "Noise Tag":
+    #    rules_affected_counts = []
+    #    rules_affected_words = []
+    #    tmp_rules_affected_counts = 0
+    #    for i, overwrites in enumerate(overwrite_tracker):
+    #        words_found = []
+    #        for item in overwrites:
+    #            match = re.findall(r': (.+)', item)
+    #            if match:
+    #                words = match[0].split("|")
+    #                words_found.extend(words)
+    #        # Simpan jumlah rules yang match dan keywords-nya
+    #        tmp_rules_affected_counts = len(overwrites)
+    #        if tmp_rules_affected_counts == 0:
+    #            tmp_rules_affected_counts = tmp_rules_affected_counts
+    #        else:
+    #            tmp_rules_affected_counts = tmp_rules_affected_counts/3
+
+    #        rules_affected_counts.append(tmp_rules_affected_counts)
+    #        rules_affected_words.append("|".join(words_found))
+    #    df["Rules Affected"] = rules_affected_counts
+    #    df["Rules Affected Words"] = rules_affected_words
+
+    # ---- NEW : build Rules Affected & Rules Affected Words ----
     if output_column == "Noise Tag":
         rules_affected_counts = []
-        rules_affected_words = []
-        tmp_rules_affected_counts = 0
-        for i, overwrites in enumerate(overwrite_tracker):
-            words_found = []
-            for item in overwrites:
-                match = re.findall(r': (.+)', item)
-                if match:
-                    words = match[0].split("|")
-                    words_found.extend(words)
-            # Simpan jumlah rules yang match dan keywords-nya
-            tmp_rules_affected_counts = len(overwrites)
-            if tmp_rules_affected_counts == 0:
-                tmp_rules_affected_counts = tmp_rules_affected_counts
-            else:
-                tmp_rules_affected_counts = tmp_rules_affected_counts/3
+        rules_affected_words  = []
 
-            rules_affected_counts.append(tmp_rules_affected_counts)
-            rules_affected_words.append("|".join(words_found))
-        df["Rules Affected"] = rules_affected_counts
+        for overwrites in overwrite_tracker:
+            # jumlah rule (tanpa pembagi 3)
+            rules_affected_counts.append(len(overwrites))
+
+            words_fmt = []
+            for item in overwrites:
+                # pola: "<Column> P<prio>: <out_val> (<keyword>)"
+                m = re.match(r'(.+?) P(\d+): (.+?) \((.+?)\)', item)
+                if m:
+                    _, _, out_val, keyword = m.groups()
+                    words_fmt.append(f"{out_val} ({keyword})")
+            rules_affected_words.append("|".join(words_fmt))
+
+        df["Rules Affected"]       = rules_affected_counts
         df["Rules Affected Words"] = rules_affected_words
+
 
 
 
@@ -748,6 +778,56 @@ def to_float(val):
     """Konversi '18,000,000' / '18.000.000' / 18000000 → 18000000.0"""
     s = re.sub(r"[^\d]", "", str(val))      # buang selain angka 0-9
     return float(s) if s else None
+
+
+
+
+def _extract_first_match(text: str, expr: str) -> str:
+    """
+    text : isi kolom yang sedang dicek (Content, Title, dst.)
+    expr : nilai Matching Value (bisa 'A|B|C' atau ekspresi '(A|B)+(C|D)')
+    Return  : satu keyword yang pertama kali ketemu di text.
+              Jika tidak ketemu apa-pun, fallback ke expr apa adanya.
+    """
+    # buang kurung luar
+    expr = expr.strip()
+    if expr.startswith("(") and expr.endswith(")"):
+        expr = expr[1:-1]
+
+    # pisah berdasarkan "|" di level teratas (abaikan + dan sub-parentheses)
+    depth = 0
+    token = ""
+    tokens = []
+    for c in expr:
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+
+        if c == '|' and depth == 0:
+            tokens.append(token.strip())
+            token = ""
+        else:
+            token += c
+    tokens.append(token.strip())
+
+    # bersihkan awalan "!"  → hanya keyword positif
+    tokens = [t.lstrip('!').strip() for t in tokens if t]
+
+    # cari token yang benar-benar ada di text
+    text_low = text.lower()
+    for t in tokens:
+        if t and t.lower() in text_low:
+            return t
+    return tokens[0] if tokens else expr        # fallback
+
+
+
+
+
+
+
+
 
 
 # === MULAI STREAMLIT APP ===
