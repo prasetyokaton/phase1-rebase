@@ -392,7 +392,6 @@ def apply_rules(df, rules, output_column, source_output_column):
         # Matching logic (same as before)
 
 
-
         # Cek apakah Matching Column mengandung lebih dari satu kolom
         if "|" in col:
             parts = [p.strip() for p in col.split("|")]  # Pisahkan Matching Column menjadi beberapa kolom
@@ -413,7 +412,18 @@ def apply_rules(df, rules, output_column, source_output_column):
         else:
             # Pencocokan normal jika hanya ada satu kolom dan satu nilai
             series = df[col].astype(str)
-            mask = series.str.contains(val, case=False, na=False)
+            #mask = series.str.contains(val, case=False, na=False)
+            # Pastikan `val` adalah string yang valid
+            if not isinstance(val, str):
+                val = str(val)  # Jika bukan string, ubah menjadi string
+
+            # Cek apakah val adalah pola regex yang valid
+            try:
+                mask = series.str.contains(val, case=False, na=False)
+            except TypeError:
+                # Jika ada TypeError (misalnya regex tidak valid), buat mask False
+                logging.error(f"❌ Invalid regex pattern: {val}")
+                mask = pd.Series([False] * len(series))  # Mask False untuk semua baris jika regex tidak valid
 
 
 
