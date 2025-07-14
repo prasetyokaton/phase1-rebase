@@ -390,6 +390,33 @@ def apply_rules(df, rules, output_column, source_output_column):
         print(f"⚠️ channel_mask: {channel_mask}")
         indeks_awal = indeks_awal+1
         # Matching logic (same as before)
+
+
+
+        # Cek apakah Matching Column mengandung lebih dari satu kolom
+        if "|" in col:
+            parts = [p.strip() for p in col.split("|")]  # Pisahkan Matching Column menjadi beberapa kolom
+            values = val.split("|")  # Pisahkan Matching Value menjadi beberapa kata kunci
+            
+            # Pastikan jumlah kolom dan nilai sama
+            if len(parts) == len(values):  
+                mask = None
+                for col_part, value in zip(parts, values):
+                    series = df[col_part].astype(str)
+                    current_mask = series.str.contains(value, case=False, na=False)
+                    if mask is None:
+                        mask = current_mask
+                    else:
+                        mask |= current_mask  # Gunakan OR untuk mencocokkan salah satu kolom atau nilai
+            else:
+                mask = pd.Series([False] * len(df))  # Jika jumlah kolom dan nilai tidak sama, buat mask False
+        else:
+            # Pencocokan normal jika hanya ada satu kolom dan satu nilai
+            series = df[col].astype(str)
+            mask = series.str.contains(val, case=False, na=False)
+
+
+
         if "+" in col:
             parts = [p.strip() for p in col.split("+")]
             if not all(p in df.columns for p in parts):
