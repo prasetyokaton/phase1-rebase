@@ -15,7 +15,7 @@ from openpyxl.styles import Font
 from openpyxl.styles import Alignment
 from column_setup_config import COLUMN_SETUP_CONFIG
 from column_order_config import COLUMN_ORDER_CONFIG
-
+import unicodedata
 
 
 
@@ -340,6 +340,20 @@ def update_media_tier_visibility(df_column_order):
     return df_column_order
 
 
+# Normalisasi fungsi
+def normalize_text(text):
+    # Pastikan input adalah string
+    text = str(text)
+    
+    # Menggunakan unicodedata untuk menghapus karakter non-ASCII
+    text = unicodedata.normalize('NFD', text)
+
+    # Hapus semua karakter non-ASCII, termasuk simbol dan karakter Unicode khusus
+    return ''.join([c for c in text if unicodedata.category(c) != 'Mn'])
+
+
+
+
 # === FUNGSI: Apply Rules ===
 def apply_rules(df, rules, output_column, source_output_column):
     import re
@@ -388,21 +402,42 @@ def apply_rules(df, rules, output_column, source_output_column):
         logging.info(f"⚠️ indeks_awal: {indeks_awal}")
         logging.info(f"⚠️ channel_mask: {channel_mask}")
         print(f"⚠️ channel_mask: {channel_mask}")
-        indeks_awal = indeks_awal+1
-        # Matching logic (same as before)
+        indeks_awal = indeks_awal + 1
+
+        # Normalisasi rule value
+        normalized_rule_value = normalize_text(str(val))
 
 
-        if "+" in col:
+
+        # Matching Logic
+        if "|" in col:  # Pencarian OR
+            parts = [p.strip() for p in col.split("|")]
+            mask = pd.Series([False] * len(df))  # Awali dengan mask False
+            for part in parts:
+                if part in df.columns:
+                    try:
+                        escaped_val = re.escape(normalized_rule_value)  # Escape special regex characters
+                        mask |= df[part].astype(str).str.contains(escaped_val, case=False, na=False)
+                    except Exception as e:
+                        logging.error(f"Error processing column '{part}' with value '{val}': {e}")
+                        continue
+        elif "+" in col:  # Pencarian AND
             parts = [p.strip() for p in col.split("+")]
-            if not all(p in df.columns for p in parts):
-                continue
-            series = df[parts[0]].astype(str)
-            for p in parts[1:]:
-                series += "+" + df[p].astype(str)
-        else:
+            mask = pd.Series([True] * len(df))  # Awal mask dengan True (karena AND)
+            for part in parts:
+                if part in df.columns:
+                    try:
+                        escaped_val = re.escape(normalized_rule_value)
+                        mask &= df[part].astype(str).str.contains(escaped_val, case=False, na=False)
+                    except Exception as e:
+                        logging.error(f"Error processing column '{part}' with value '{val}': {e}")
+                        continue
+        else:  # Pencarian untuk satu kata kunci
             if col not in df.columns:
                 continue
             series = df[col].astype(str)
+            mask = series.str.contains(normalized_rule_value, case=False, na=False)
+
         
         print(f"⚠️ series: {series}")
         logging.info(f"⚠️ series: {series}")
@@ -504,42 +539,32 @@ def apply_rules(df, rules, output_column, source_output_column):
         logging.info(f"⚠️ update_mask: {update_mask}")
         print(f"⚠️ update_mask: {update_mask}")
 
-        # Apply output to all relevant output columns
+        # Apply output to relevant columns
         for output_col in output_cols_in_rules:
             out_val = rule.get(output_col)
             colname = output_col.replace("Output ", "")
             if pd.notna(out_val) and colname in df.columns:
-                update_condition = update_mask & (priority_tracker[colname] > priority)
-                
+                update_condition = mask & channel_mask & (priority_tracker[colname] > priority)
+
                 if update_condition.any():
                     logging.info(f"✅ Rule applied: {rule.to_dict()}")
 
                 df.loc[update_condition, colname] = out_val
                 priority_tracker[colname].loc[update_condition] = priority
-                #for idx in update_condition[update_condition].index:
-                #    overwrite_tracker[idx].append(f"{colname} P{priority}: {out_val}")
-                    
+                
                 for idx in update_condition[update_condition].index:
                     matched_kw = _extract_first_match(series.at[idx], val)
-                    overwrite_tracker[idx].append(
-                        f"{colname} P{priority}: {out_val} ({matched_kw})"
-                    )
+                    overwrite_tracker[idx].append(f"{colname} P{priority}: {out_val} ({matched_kw})")
 
 
 
         tmp_update_mask_sum = 0
-        # Log per Output Column
+        # Log summary
         for output_col in output_cols_in_rules:
             out_val = rule.get(output_col)
             colname = output_col.replace("Output ", "")
             if pd.notna(out_val) and colname in df.columns:
-                
-                tmp_update_mask_sum = update_mask.sum()
-                if tmp_update_mask_sum == 0:
-                    affected_count = tmp_update_mask_sum
-                else:
-                    affected_count = tmp_update_mask_sum/3
-                
+                affected_count = mask.sum()
                 if affected_count > 0 and pd.notna(out_val):
                     summary_logs.append({
                         "Priority": priority,
@@ -552,30 +577,6 @@ def apply_rules(df, rules, output_column, source_output_column):
                         "Output Value": out_val
                     })
 
-
-    # Tambahkan Rules Affected & Rules Affected Words hanya untuk Noise Tag
-    #if output_column == "Noise Tag":
-    #    rules_affected_counts = []
-    #    rules_affected_words = []
-    #    tmp_rules_affected_counts = 0
-    #    for i, overwrites in enumerate(overwrite_tracker):
-    #        words_found = []
-    #        for item in overwrites:
-    #            match = re.findall(r': (.+)', item)
-    #            if match:
-    #                words = match[0].split("|")
-    #                words_found.extend(words)
-    #        # Simpan jumlah rules yang match dan keywords-nya
-    #        tmp_rules_affected_counts = len(overwrites)
-    #        if tmp_rules_affected_counts == 0:
-    #            tmp_rules_affected_counts = tmp_rules_affected_counts
-    #        else:
-    #            tmp_rules_affected_counts = tmp_rules_affected_counts/3
-
-    #        rules_affected_counts.append(tmp_rules_affected_counts)
-    #        rules_affected_words.append("|".join(words_found))
-    #    df["Rules Affected"] = rules_affected_counts
-    #    df["Rules Affected Words"] = rules_affected_words
 
     # ---- NEW : build Rules Affected & Rules Affected Words ----
     if output_column == "Noise Tag":
@@ -599,13 +600,8 @@ def apply_rules(df, rules, output_column, source_output_column):
         df["Rules Affected Words"] = rules_affected_words
 
 
-
-
-    # Simpan chain overwrite jika hanya untuk Noise Tag
-    #df[output_column + " - Chain Overwrite"] = [" ➔ ".join(x) if x else "" for x in overwrite_tracker]
     summary_df = pd.DataFrame(summary_logs)
     return df, summary_df
-
 
 
 #Untuk menentukan official account
