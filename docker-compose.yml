@@ -23,12 +23,12 @@
 version: '3.9'
 
 services:
-  phase1:
-    container_name: phase1
+  phase1-rebase:
+    container_name: phase1-rebase
     build:
       context: .
       dockerfile: Dockerfile
-    image: phase1:latest
+    image: phase1-rebase:latest
     ports:
       - "8502:8501"
     volumes:
