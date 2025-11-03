@@ -836,6 +836,52 @@ def to_float(val):
     s = re.sub(r"[^\d]", "", str(val))      # buang selain angka 0-9
     return float(s) if s else None
 
+# === MODELED REACH (MR) ======================================
+MR_CONFIG = {
+    "tiktok":    {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.026},
+    "instagram": {"w_base": 0.85, "w_fol": 0.15, "fol_k": 0.019},
+    "twitter":   {"w_base": 0.75, "w_fol": 0.25, "fol_k": 0.015},
+    "facebook":  {"w_base": 0.80, "w_fol": 0.20, "fol_k": 0.012},
+    "youtube":   {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.020},
+    "default":   {"w_base": 1.00, "w_fol": 0.00, "fol_k": 0.000},
+}
+
+def add_mr(df, config=MR_CONFIG):
+    df = df.copy()
+
+    # pastikan numeric
+    for col in ["Followers", "Views", "Video Views", "Impressions", "Reach",
+                "Original Reach", "Potential Reach"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].apply(to_float), errors="coerce").fillna(0)
+
+    # base: Views -> Video Views -> Impressions -> Reach
+    base = pd.Series(0.0, index=df.index)
+    for cand in ["Views", "Video Views", "Impressions", "Reach"]:
+        if cand in df.columns:
+            base = base.where(base > 0, df[cand])
+
+    # fallback base: Original Reach + Potential Reach
+    if (base == 0).any():
+        ori = df["Original Reach"] if "Original Reach" in df.columns else 0
+        pot = df["Potential Reach"] if "Potential Reach" in df.columns else 0
+        base = base.where(base > 0, pd.to_numeric(ori, errors="coerce").fillna(0) +
+                                     pd.to_numeric(pot, errors="coerce").fillna(0))
+
+    followers = df["Followers"] if "Followers" in df.columns else pd.Series(0.0, index=df.index)
+
+    df["_base"] = pd.to_numeric(base, errors="coerce").fillna(0)
+    df["_fol"]  = pd.to_numeric(followers, errors="coerce").fillna(0)
+
+    def _row_mr(row):
+        ch = str(row.get("Channel", "")).strip().lower()
+        cfg = config.get(ch, config["default"])
+        return (cfg["w_base"] * row["_base"]) + (cfg["w_fol"] * (row["_fol"] * cfg["fol_k"]))
+
+    df["MR"] = df.apply(_row_mr, axis=1).round(0).astype(int)
+    df.drop(columns=["_base", "_fol"], inplace=True)
+    return df
+# =============================================================
 
 
 
@@ -1191,8 +1237,9 @@ if submit:
         if "Original Reach" in df_processed.columns and "Potential Reach" in df_processed.columns:
             df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
 
-        # === Hitung Modeled Reach (MR) ===
-        df_processed = add_modeled_reach(df_processed, MR_CONFIG)
+        # === Hitung MR ===
+        df_processed = add_mr(df_processed)
+
 
 
         # Apply Official Account Logic dari setup sheet
@@ -1294,12 +1341,13 @@ if submit:
 
 
 
-        # pastikan MR ikut output, tepat setelah Followers
+        # Pastikan MR ikut output tepat setelah Followers
         if "MR" in df_processed.columns and "MR" not in final_cols:
             if "Followers" in final_cols:
                 final_cols.insert(final_cols.index("Followers") + 1, "MR")
             else:
                 final_cols.append("MR")
+
 
 
 
