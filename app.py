@@ -16,7 +16,7 @@ from openpyxl.styles import Alignment
 from column_setup_config import COLUMN_SETUP_CONFIG
 from column_order_config import COLUMN_ORDER_CONFIG
 import unicodedata
-
+import math
 
 
 
@@ -322,66 +322,70 @@ def init_logging(project_name, uploaded_filename):
     return log_filename
 
 
-# === MODELED REACH (MR) =========================================
-# Konfigurasi bobot per channel (silakan ganti sesuai versi yang kamu pakai sebelumnya)
-MR_CONFIG = {
-    "tiktok":    {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.026},
-    "instagram": {"w_base": 0.85, "w_fol": 0.15, "fol_k": 0.019},
-    "twitter":   {"w_base": 0.75, "w_fol": 0.25, "fol_k": 0.015},
-    "facebook":  {"w_base": 0.80, "w_fol": 0.20, "fol_k": 0.012},
-    "youtube":   {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.020},
-    "default":   {"w_base": 1.00, "w_fol": 0.00, "fol_k": 0.000},
+# === MODELED REACH (MR) — alpha*(Views_used*u) + (1-alpha)*(Followers*r)
+# Views_used = Views jika >0; jika 0/kosong → pakai Buzz
+# MR harus < Views (bila Views>0) dan jika Views=0 → MR < Buzz
+
+
+# tetap pakai MR_PARAMS kamu
+MR_PARAMS = {
+    "instagram": {"alpha": 0.6, "u": 0.7,  "r": 0.035},
+    "tiktok":    {"alpha": 0.9, "u": 0.7,  "r": 0.026},
+    "youtube":   {"alpha": 0.9, "u": 0.7,  "r": 0.0112},
+    "facebook":  {"alpha": 0.5, "u": 0.7,  "r": 0.0015},
+    "twitter":   {"alpha": 0.7, "u": 0.6,  "r": 0.00029},
+    "x":         {"alpha": 0.7, "u": 0.6,  "r": 0.00029},
+    "default":   {"alpha": 0.7, "u": 0.7,  "r": 0.01},
 }
 
-def _to_num(x):
-    v = to_float(x)
-    return v if v is not None else 0.0
-
-def add_modeled_reach(df, config=MR_CONFIG):
+def add_mr(df, params=MR_PARAMS):
     df = df.copy()
 
-    # Pastikan numeric
-    for col in ["Followers", "Views", "Video Views", "Impressions", "Reach",
-                "Original Reach", "Potential Reach"]:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_num)
+    # ambil Views numeric (boleh kosong)
+    views = (
+        pd.to_numeric(df.get("Views", 0).apply(to_float), errors="coerce")
+        .fillna(0)
+    )
+    # jika Views 0/kosong → pakai Buzz
+    buzz = (
+        pd.to_numeric(df.get("Buzz", 0).apply(to_float), errors="coerce")
+        .fillna(0)
+    )
+    views_eff = views.where(views > 0, buzz)
 
-    # Base reach: urutkan prioritas sumber data
-    base = pd.Series(0.0, index=df.index)
-    for cand in ["Views", "Video Views", "Impressions", "Reach"]:
-        if cand in df.columns:
-            base = base.where(base > 0, df[cand])
+    # followers
+    followers = (
+        pd.to_numeric(df.get("Followers", 0).apply(to_float), errors="coerce")
+        .fillna(0)
+    )
 
-    if (base == 0).any():
-        # fallback: Original Reach + Potential Reach
-        ori = df["Original Reach"] if "Original Reach" in df.columns else 0
-        pot = df["Potential Reach"] if "Potential Reach" in df.columns else 0
-        base = base.where(base > 0, (ori + pot).astype(float))
-
-    followers = df["Followers"] if "Followers" in df.columns else pd.Series(0.0, index=df.index)
-
-    # Hitung MR per-baris
-    def _row_mr(row):
+    # hitung MR per baris
+    def _mr_row(i, row):
         ch = str(row.get("Channel", "")).strip().lower()
-        cfg = config.get(ch, config["default"])
-        return (cfg["w_base"] * row["_mr_base"]) + (cfg["w_fol"] * (row["_mr_followers"] * cfg["fol_k"]))
+        p  = params.get(ch, params["default"])
+        alpha, u, r = p["alpha"], p["u"], p["r"]
 
-    df["_mr_base"] = base
-    df["_mr_followers"] = followers
-    df["Modeled Reach (MR)"] = df.apply(_row_mr, axis=1).round(0).astype(int)
-    df.drop(columns=["_mr_base", "_mr_followers"], inplace=True)
+        v_eff = views_eff.iat[i]
+        foll  = followers.iat[i]
 
-    # Sisipkan kolom MR setelah Followers jika memungkinkan
-    if "Modeled Reach (MR)" in df.columns and "Followers" in df.columns:
-        cols = list(df.columns)
-        cols.remove("Modeled Reach (MR)")
-        insert_at = cols.index("Followers") + 1
-        cols.insert(insert_at, "Modeled Reach (MR)")
-        df = df[cols]
+        mr_raw = alpha * (v_eff * u) + (1 - alpha) * (foll * r)
 
+        # round up (ceil), integer
+        mr_int = int(math.ceil(mr_raw)) if mr_raw > 0 else 0
+
+        # cap ketat:
+        # - kalau Views > 0: MR < Views
+        # - kalau Views == 0: MR < Buzz
+        cap_base = views.iat[i] if views.iat[i] > 0 else buzz.iat[i]
+        if cap_base > 0:
+            mr_int = min(mr_int, max(int(cap_base) - 1, 0))
+        else:
+            mr_int = 0
+
+        return mr_int
+
+    df["MR"] = [ _mr_row(i, row) for i, row in enumerate(df.to_dict("records")) ]
     return df
-# ================================================================
-
 
 
 # Function to update the "Media Tier" visibility in the Column Order Setup sheet
@@ -832,56 +836,51 @@ def assign_hashtag_priority(df, df_hp, project_name):
 
 #jagain untuk float tidak ada koma atau titik
 def to_float(val):
-    """Konversi '18,000,000' / '18.000.000' / 18000000 → 18000000.0"""
-    s = re.sub(r"[^\d]", "", str(val))      # buang selain angka 0-9
-    return float(s) if s else None
+    """
+    Konversi string angka Indonesia/Inggris + akhiran k/m:
+    - '1.234' -> 1234
+    - '1,234' -> 1234
+    - '1.234,56' -> 1234.56
+    - '1,234.56' -> 1234.56
+    - '1,7' -> 1.7
+    - '1.7k' / '1,7k' -> 1700
+    - '18.000.000' -> 18000000
+    - '18,000,000' -> 18000000
+    """
+    if val is None:
+        return None
+    s = str(val).strip().lower()
+    if s in ("", "nan", "none", "-"):
+        return None
 
-# === MODELED REACH (MR) — pakai rumus alpha*(Views*u) + (1-alpha)*(Followers*r)
-MR_PARAMS = {
-    "instagram": {"alpha": 0.6, "u": 0.7,  "r": 0.035},
-    "tiktok":    {"alpha": 0.9, "u": 0.7,  "r": 0.026},
-    "youtube":   {"alpha": 0.9, "u": 0.7,  "r": 0.0112},
-    "facebook":  {"alpha": 0.5, "u": 0.7,  "r": 0.0015},
-    "twitter":   {"alpha": 0.7, "u": 0.6,  "r": 0.00029},
-    "x":         {"alpha": 0.7, "u": 0.6,  "r": 0.00029},   # jaga-jaga jika channel tercatat 'X'
-    "default":   {"alpha": 0.7, "u": 0.7,  "r": 0.01},      # fallback aman
-}
+    # handle suffix
+    mult = 1
+    if s.endswith("k"):
+        mult, s = 1_000, s[:-1].strip()
+    elif s.endswith("m"):
+        mult, s = 1_000_000, s[:-1].strip()
 
-def add_mr(df, params=MR_PARAMS):
-    df = df.copy()
+    # keep only digits, comma, dot, minus
+    s = re.sub(r"[^0-9,.\-]", "", s)
 
-    # ---- ambil Views dengan prioritas: Views > Video Views > Impressions > Reach
-    views = pd.Series(0.0, index=df.index)
-    for col in ["Views", "Video Views", "Impressions", "Reach"]:
-        if col in df.columns:
-            col_vals = pd.to_numeric(df[col].apply(to_float), errors="coerce").fillna(0)
-            views = views.where(views > 0, col_vals)
+    # case: both dot and comma exist → tentukan mana desimal
+    if "," in s and "." in s:
+        # asumsikan format Indonesia: '.' = ribuan, ',' = desimal (contoh: 1.234,56)
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            # format Inggris: ',' = ribuan, '.' = desimal (contoh: 1,234.56)
+            s = s.replace(",", "")
+    else:
+        # hanya koma → anggap koma sebagai desimal
+        if "," in s:
+            s = s.replace(",", ".")
+        # hanya titik → biarkan (sudah desimal Inggris)
 
-    # fallback extra: kalau views masih 0, pakai Original Reach + Potential Reach
-    if (views == 0).any():
-        ori = pd.to_numeric(df["Original Reach"].apply(to_float), errors="coerce").fillna(0) if "Original Reach" in df.columns else 0
-        pot = pd.to_numeric(df["Potential Reach"].apply(to_float), errors="coerce").fillna(0) if "Potential Reach" in df.columns else 0
-        views = views.where(views > 0, ori + pot)
-
-    # Followers numeric (kalau tak ada, anggap 0)
-    followers = (
-        pd.to_numeric(df["Followers"].apply(to_float), errors="coerce").fillna(0)
-        if "Followers" in df.columns else pd.Series(0.0, index=df.index)
-    )
-
-    df["_views"] = views
-    df["_followers"] = followers
-
-    def _row_mr(row):
-        ch = str(row.get("Channel", "")).strip().lower()
-        p  = params.get(ch, params["default"])
-        alpha, u, r = p["alpha"], p["u"], p["r"]
-        return alpha * (row["_views"] * u) + (1 - alpha) * (row["_followers"] * r)
-
-    df["MR"] = df.apply(_row_mr, axis=1).round(0).astype(int)
-    df.drop(columns=["_views", "_followers"], inplace=True)
-    return df
-
+    try:
+        return float(s) * mult
+    except:
+        return None
 
 
 
@@ -1238,6 +1237,7 @@ if submit:
             df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
 
         # === Hitung MR ===
+        df_processed.drop(columns=["MR"], errors="ignore", inplace=True)
         df_processed = add_mr(df_processed)
 
 
