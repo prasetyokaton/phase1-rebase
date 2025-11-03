@@ -836,52 +836,52 @@ def to_float(val):
     s = re.sub(r"[^\d]", "", str(val))      # buang selain angka 0-9
     return float(s) if s else None
 
-# === MODELED REACH (MR) ======================================
-MR_CONFIG = {
-    "tiktok":    {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.026},
-    "instagram": {"w_base": 0.85, "w_fol": 0.15, "fol_k": 0.019},
-    "twitter":   {"w_base": 0.75, "w_fol": 0.25, "fol_k": 0.015},
-    "facebook":  {"w_base": 0.80, "w_fol": 0.20, "fol_k": 0.012},
-    "youtube":   {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.020},
-    "default":   {"w_base": 1.00, "w_fol": 0.00, "fol_k": 0.000},
+# === MODELED REACH (MR) — pakai rumus alpha*(Views*u) + (1-alpha)*(Followers*r)
+MR_PARAMS = {
+    "instagram": {"alpha": 0.6, "u": 0.7,  "r": 0.035},
+    "tiktok":    {"alpha": 0.9, "u": 0.7,  "r": 0.026},
+    "youtube":   {"alpha": 0.9, "u": 0.7,  "r": 0.0112},
+    "facebook":  {"alpha": 0.5, "u": 0.7,  "r": 0.0015},
+    "twitter":   {"alpha": 0.7, "u": 0.6,  "r": 0.00029},
+    "x":         {"alpha": 0.7, "u": 0.6,  "r": 0.00029},   # jaga-jaga jika channel tercatat 'X'
+    "default":   {"alpha": 0.7, "u": 0.7,  "r": 0.01},      # fallback aman
 }
 
-def add_mr(df, config=MR_CONFIG):
+def add_mr(df, params=MR_PARAMS):
     df = df.copy()
 
-    # pastikan numeric
-    for col in ["Followers", "Views", "Video Views", "Impressions", "Reach",
-                "Original Reach", "Potential Reach"]:
+    # ---- ambil Views dengan prioritas: Views > Video Views > Impressions > Reach
+    views = pd.Series(0.0, index=df.index)
+    for col in ["Views", "Video Views", "Impressions", "Reach"]:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col].apply(to_float), errors="coerce").fillna(0)
+            col_vals = pd.to_numeric(df[col].apply(to_float), errors="coerce").fillna(0)
+            views = views.where(views > 0, col_vals)
 
-    # base: Views -> Video Views -> Impressions -> Reach
-    base = pd.Series(0.0, index=df.index)
-    for cand in ["Views", "Video Views", "Impressions", "Reach"]:
-        if cand in df.columns:
-            base = base.where(base > 0, df[cand])
+    # fallback extra: kalau views masih 0, pakai Original Reach + Potential Reach
+    if (views == 0).any():
+        ori = pd.to_numeric(df["Original Reach"].apply(to_float), errors="coerce").fillna(0) if "Original Reach" in df.columns else 0
+        pot = pd.to_numeric(df["Potential Reach"].apply(to_float), errors="coerce").fillna(0) if "Potential Reach" in df.columns else 0
+        views = views.where(views > 0, ori + pot)
 
-    # fallback base: Original Reach + Potential Reach
-    if (base == 0).any():
-        ori = df["Original Reach"] if "Original Reach" in df.columns else 0
-        pot = df["Potential Reach"] if "Potential Reach" in df.columns else 0
-        base = base.where(base > 0, pd.to_numeric(ori, errors="coerce").fillna(0) +
-                                     pd.to_numeric(pot, errors="coerce").fillna(0))
+    # Followers numeric (kalau tak ada, anggap 0)
+    followers = (
+        pd.to_numeric(df["Followers"].apply(to_float), errors="coerce").fillna(0)
+        if "Followers" in df.columns else pd.Series(0.0, index=df.index)
+    )
 
-    followers = df["Followers"] if "Followers" in df.columns else pd.Series(0.0, index=df.index)
-
-    df["_base"] = pd.to_numeric(base, errors="coerce").fillna(0)
-    df["_fol"]  = pd.to_numeric(followers, errors="coerce").fillna(0)
+    df["_views"] = views
+    df["_followers"] = followers
 
     def _row_mr(row):
         ch = str(row.get("Channel", "")).strip().lower()
-        cfg = config.get(ch, config["default"])
-        return (cfg["w_base"] * row["_base"]) + (cfg["w_fol"] * (row["_fol"] * cfg["fol_k"]))
+        p  = params.get(ch, params["default"])
+        alpha, u, r = p["alpha"], p["u"], p["r"]
+        return alpha * (row["_views"] * u) + (1 - alpha) * (row["_followers"] * r)
 
     df["MR"] = df.apply(_row_mr, axis=1).round(0).astype(int)
-    df.drop(columns=["_base", "_fol"], inplace=True)
+    df.drop(columns=["_views", "_followers"], inplace=True)
     return df
-# =============================================================
+
 
 
 
