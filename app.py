@@ -322,6 +322,65 @@ def init_logging(project_name, uploaded_filename):
     return log_filename
 
 
+# === MODELED REACH (MR) =========================================
+# Konfigurasi bobot per channel (silakan ganti sesuai versi yang kamu pakai sebelumnya)
+MR_CONFIG = {
+    "tiktok":    {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.026},
+    "instagram": {"w_base": 0.85, "w_fol": 0.15, "fol_k": 0.019},
+    "twitter":   {"w_base": 0.75, "w_fol": 0.25, "fol_k": 0.015},
+    "facebook":  {"w_base": 0.80, "w_fol": 0.20, "fol_k": 0.012},
+    "youtube":   {"w_base": 0.90, "w_fol": 0.10, "fol_k": 0.020},
+    "default":   {"w_base": 1.00, "w_fol": 0.00, "fol_k": 0.000},
+}
+
+def _to_num(x):
+    v = to_float(x)
+    return v if v is not None else 0.0
+
+def add_modeled_reach(df, config=MR_CONFIG):
+    df = df.copy()
+
+    # Pastikan numeric
+    for col in ["Followers", "Views", "Video Views", "Impressions", "Reach",
+                "Original Reach", "Potential Reach"]:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_num)
+
+    # Base reach: urutkan prioritas sumber data
+    base = pd.Series(0.0, index=df.index)
+    for cand in ["Views", "Video Views", "Impressions", "Reach"]:
+        if cand in df.columns:
+            base = base.where(base > 0, df[cand])
+
+    if (base == 0).any():
+        # fallback: Original Reach + Potential Reach
+        ori = df["Original Reach"] if "Original Reach" in df.columns else 0
+        pot = df["Potential Reach"] if "Potential Reach" in df.columns else 0
+        base = base.where(base > 0, (ori + pot).astype(float))
+
+    followers = df["Followers"] if "Followers" in df.columns else pd.Series(0.0, index=df.index)
+
+    # Hitung MR per-baris
+    def _row_mr(row):
+        ch = str(row.get("Channel", "")).strip().lower()
+        cfg = config.get(ch, config["default"])
+        return (cfg["w_base"] * row["_mr_base"]) + (cfg["w_fol"] * (row["_mr_followers"] * cfg["fol_k"]))
+
+    df["_mr_base"] = base
+    df["_mr_followers"] = followers
+    df["Modeled Reach (MR)"] = df.apply(_row_mr, axis=1).round(0).astype(int)
+    df.drop(columns=["_mr_base", "_mr_followers"], inplace=True)
+
+    # Sisipkan kolom MR setelah Followers jika memungkinkan
+    if "Modeled Reach (MR)" in df.columns and "Followers" in df.columns:
+        cols = list(df.columns)
+        cols.remove("Modeled Reach (MR)")
+        insert_at = cols.index("Followers") + 1
+        cols.insert(insert_at, "Modeled Reach (MR)")
+        df = df[cols]
+
+    return df
+# ================================================================
 
 
 
@@ -1126,11 +1185,14 @@ if submit:
         summary_combined = pd.concat([summary_df, summary_df_issue, summary_df_sub_issue], ignore_index=True)
 
         # hitung followers
-        update_progress(9, 14, "⚙️ Count Followers ..")
+        update_progress(9, 14, "⚙️ Count Followers and Modelled Reach ..")
         time.sleep(1)
         # === Hitung kolom Followers ===
         if "Original Reach" in df_processed.columns and "Potential Reach" in df_processed.columns:
             df_processed["Followers"] = df_processed["Original Reach"].fillna(0) + df_processed["Potential Reach"].fillna(0)
+
+        # === Hitung Modeled Reach (MR) ===
+        df_processed = add_modeled_reach(df_processed, MR_CONFIG)
 
 
         # Apply Official Account Logic dari setup sheet
@@ -1229,6 +1291,17 @@ if submit:
             final_cols.remove("Hashtag Priority")
             hashtag_index = final_cols.index("Hashtag")
             final_cols.insert(hashtag_index + 1, "Hashtag Priority")
+
+
+
+        # pastikan MR ikut output, tepat setelah Followers
+        if "MR" in df_processed.columns and "MR" not in final_cols:
+            if "Followers" in final_cols:
+                final_cols.insert(final_cols.index("Followers") + 1, "MR")
+            else:
+                final_cols.append("MR")
+
+
 
 
         # Update final dataframe with the ordered columns
