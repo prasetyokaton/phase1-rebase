@@ -36,224 +36,262 @@ class GenderPredictor:
         return self.labels[result], round(proba * 100, 2)
 
 
-@st.cache_resource(ttl=3600)
+@st.cache_resource(ttl=3600) #Cache berlaku selama 1 jam menit
 def load_google_sheets_data():
+    #this apply for local
+    #if os.path.exists('/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'):
+    #    SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+    #else:
+    #    SERVICE_ACCOUNT_FILE = './.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+
     SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     client = gspread.authorize(creds)
 
-    spreadsheet_id = "1oWq0j03boWJySrQCD14xqLBjO0E6-T_7q1EYb2FcdsU"
+    spreadsheet_id = "1oL9rAR_SuVOjqOLVnYhr7jp8_qxVXuqc_9Imi3RjEEM"
     spreadsheet = client.open_by_key(spreadsheet_id)
 
     data = {
         "df_project_list": pd.DataFrame(spreadsheet.worksheet("Project List").get_all_records()),
+        #"df_column_setup": pd.DataFrame(spreadsheet.worksheet("Column Setup").get_all_records()),
         "df_rules": pd.DataFrame(spreadsheet.worksheet("Rules").get_all_records()),
         "df_column_order": pd.DataFrame(spreadsheet.worksheet("Column Order Setup").get_all_records()),
         "df_method_1_keyword": pd.DataFrame(spreadsheet.worksheet("Method 1 Keyword").get_all_records()),
         "df_method_selection": pd.DataFrame(spreadsheet.worksheet("Method Selection").get_all_records()),
         "df_official_account_setup": pd.DataFrame(spreadsheet.worksheet("Official Account Setup").get_all_records()),
         "last_updated": spreadsheet.worksheet("NOTES").cell(1, 2).value,
-        "df_hashtag_priority": pd.DataFrame(spreadsheet.worksheet("Hashtag Priority").get_all_records())
+        "df_hashtag_priority" : pd.DataFrame(spreadsheet.worksheet("Hashtag Priority").get_all_records())
     }
     return data
 
 
-@st.cache_resource(ttl=3600)
-def load_creator_type_sheets():
-    """Cache Google Sheets untuk Creator Type logic"""
-    SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    
-    # Load GSheet for Media Tier & PAP/PA
-    #sheet_main = client.open_by_key("1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII")
-    sheet_main = client.open_by_key("1eqLCCH2xho-Eh43sZQUSN7sVoBBLc8LIGaRrMZl5QXA")
-    df_online = pd.DataFrame(sheet_main.worksheet("Online with AVE - Updated").get_all_records())
-    
-    # Load GSheet for KOL & HM
-    #sheet_kol = client.open_by_key("1FKIw9tpwiZs2VlIx4xjwPp0u_8BbxFRYF5uY8Jf_ozg")
-    sheet_kol = client.open_by_key("1DPb98BWW2-sdYbMsQGqy79aIHbUNCD40NvMovQJJpPU")
-    df_kol = pd.DataFrame(sheet_kol.worksheet("List KOL Nojorono").get_all_records())
-    df_hm = pd.DataFrame(sheet_kol.worksheet("List Homeless Media").get_all_records())
-    
-    # Clean columns
-    df_online.columns = df_online.columns.str.strip()
-    df_kol.columns = df_kol.columns.str.strip()
-    df_hm.columns = df_hm.columns.str.strip()
-    
-    return df_online, df_kol, df_hm
-
-@st.cache_resource(ttl=3600)
-def load_media_tier_sheets():
-    """Cache Google Sheets untuk Media Tier logic"""
-    SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    
-    #sheet_id = "1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII"
-    sheet_id = "1eqLCCH2xho-Eh43sZQUSN7sVoBBLc8LIGaRrMZl5QXA"
-    spreadsheet = client.open_by_key(sheet_id)
-    
-    data_client = spreadsheet.worksheet("Le Minerale - from Client").get_all_records()
-    data_online = spreadsheet.worksheet("Online with AVE - Updated").get_all_records()
-    
-    # Buat dictionary dengan key lowercase
-    media_tier_dict_client = {
-        row.get("Media Name", "").strip().lower(): row.get("Media Tier")
-        for row in data_client if row.get("Media Name")
-    }
-    media_tier_dict_online = {
-        row.get("Media Name", "").strip().lower(): row.get("Media Tier")
-        for row in data_online if row.get("Media Name")
-    }
-    
-    return media_tier_dict_client, media_tier_dict_online
-
 def apply_creator_type_logic(df):
-    """Vectorized version - 30x faster"""
     try:
-        # Load cached sheets
-        df_online, df_kol, df_hm = load_creator_type_sheets()
+        # Setup Google Sheets access
+        SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        client = gspread.authorize(creds)
+
+        # --- Load GSheet for Media Tier & PAP/PA ---
+        sheet_main = client.open_by_key("1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII")
+        df_online = pd.DataFrame(sheet_main.worksheet("Online with AVE - Updated").get_all_records())
+
+        # --- Load GSheet for KOL & HM ---
+        sheet_kol = client.open_by_key("1FKIw9tpwiZs2VlIx4xjwPp0u_8BbxFRYF5uY8Jf_ozg")
+        df_kol = pd.DataFrame(sheet_kol.worksheet("List KOL Nojorono").get_all_records())
+        df_hm = pd.DataFrame(sheet_kol.worksheet("List Homeless Media").get_all_records())
+
+        # Bersihkan kolom
+        df_online.columns = df_online.columns.str.strip()
+        df_kol.columns = df_kol.columns.str.strip()
+        df_hm.columns = df_hm.columns.str.strip()
         
         if "Creator Type" not in df.columns:
             df['Creator Type'] = ""
-        
-        # STEP 1: PA (Publisher Article) - VECTORIZED
-        online_mask = df["Channel"].str.strip().str.lower() == "online media"
-        for tier in ["1", "2", "3"]:
-            tier_media = df_online[df_online["Media Tier"].astype(str) == tier]["Media Name"].str.strip().str.lower().unique()
-            media_mask = df["Media Name"].str.strip().str.lower().isin(tier_media)
-            final_mask = online_mask & media_mask & (df["Creator Type"] == "")
-            df.loc[final_mask, "Creator Type"] = f"PA Tier {tier}"
-        
-        # STEP 2: PAP (Publisher Article Plus) - VECTORIZED
-        for tier in ["1", "2", "3"]:
-            tier_media = df_online[df_online["Media Tier"].astype(str) == tier]["Media Name"].str.strip().str.lower().unique()
-            media_mask = df["Media Name"].str.strip().str.lower().isin(tier_media)
-            final_mask = online_mask & media_mask & (df["Creator Type"] == "") & (df["Author"].notna())
-            
-            # Check if author is in media name
-            for idx in df[final_mask].index:
-                author = str(df.at[idx, "Author"]).strip().lower()
-                media = str(df.at[idx, "Media Name"]).strip().lower()
-                if author and author not in media:
+
+
+        # --- STEP 1: PA (Publisher Article) ---
+        for idx, row in df[df["Channel"].str.strip().str.lower() == "online media"].iterrows():
+            media_name = str(row.get("Media Name", "")).strip()
+            media_tier = str(row.get("Media Tier", "")).strip()
+            if media_name and media_tier in ["1", "2", "3"]:
+                df.at[idx, "Creator Type"] = f"PA Tier {media_tier}"
+
+        # --- STEP 2: PAP (PA Publisher) ---
+        for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok"])].iterrows():
+            channel = row["Channel"].lower()
+            author = str(row.get("Author", "")).strip().lower()
+            if channel == "instagram":
+                kol = df_online[df_online["Instagram Author Name"].str.strip().str.lower() == author]
+            elif channel == "tiktok":
+                kol = df_online[df_online["Tiktok Author Name"].str.strip().str.lower() == author]
+            else:
+                continue
+            if not kol.empty:
+                tier = str(kol.iloc[0].get("Media Tier", "")).strip()
+                if tier in ["1", "2", "3"]:
                     df.at[idx, "Creator Type"] = f"PAP Tier {tier}"
-        
-        # STEP 3: KOL - VECTORIZED
-        social_mask = df["Channel"].str.strip().str.lower().isin([
-            "facebook", "twitter", "instagram", "tiktok", "youtube"
-        ])
-        kol_authors = df_kol["Account Name"].str.strip().str.lower().unique()
-        author_mask = df["Author"].str.strip().str.lower().isin(kol_authors)
-        final_mask = social_mask & author_mask & (df["Creator Type"] == "")
-        df.loc[final_mask, "Creator Type"] = "KOL"
-        
-        # STEP 4: HM (Homeless Media) - VECTORIZED
-        hm_media = df_hm["Media Name"].str.strip().str.lower().unique()
-        media_mask = df["Media Name"].str.strip().str.lower().isin(hm_media)
-        final_mask = online_mask & media_mask & (df["Creator Type"] == "")
-        df.loc[final_mask, "Creator Type"] = "HM"
-        
-        logging.info(f"✅ Creator Type logic applied successfully")
-        return df
-        
+
+        # --- STEP 3: HM (Homeless Media + Keyword Matching) ---
+        media_keywords = [
+            "media", "news", "update", "daily", "info", "portal", "tribun", "detik",
+            "times", "today", "berita", "channel", "tv", "net", "kompas", 
+            "kabar", "indozone", "cnn", "liputan", "official", "forum", "post", "koran",
+            "zona", "zone", "idn", "music", "musik", "tech", "health", "headline", "newsroom",
+            "film", "local", "lokal", "hospital", "resort", "radio", "digital", 
+            "agency", "studio", "group", "restaurant", "university", "universitas", "collage", "grup", "festival",
+            "foundation", "institut", "institute", "org", "academy", "school", "sekolah", "kampus", 
+            "community", "komunitas", "cafe", "coffee", "sport",
+            "wisata", "tempat", "clinic", "fotografi", "videografi", "editor", "visual",
+            "jakarta", "bandung", "bali", "jogja", "banten", "surabaya", "nusantara", "bogor", "bekasi", "tangerang",
+            "mart", "indomie", "minuman", "oleholeh", "jajanan", "distro", "merch", "grosir", "wholesale", "toserba", "minimarket", "kios",
+            "travel", "trip", "explore", "vacation", "holiday", "homestay", "penginapan", "villa", "hotel", "kost", "guesthouse",
+            "engineering", "arsitek", "kontraktor", "interior", "furnitur", "elektronik", "mesin",
+            "diskon", "promo", "gratis", "reseller", "dropship", "seller", "jualan", "toko",
+            "quotes", "motivasi", "edukasi", "trivia"
+        ]
+
+
+
+        for idx, row in df[df["Channel"].str.lower().isin(["instagram", "tiktok", "facebook", "youtube", "twitter"])].iterrows():
+            author = str(row.get("Author", "")).strip().lower()
+            match_list = df_hm[df_hm["Author Name"].str.strip().str.lower() == author]
+
+            followers = row.get("Followers", "")
+            try:
+                followers = int(str(followers).replace(",", "").strip())
+            except:
+                followers = 0
+
+            is_hm_from_keyword = any(kw in author for kw in media_keywords)
+            is_hm_listed = not match_list.empty
+
+            if is_hm_listed or is_hm_from_keyword:
+                if followers > 1_000_000:
+                    df.at[idx, "Creator Type"] = "HM Mega"
+                elif followers > 100_000:
+                    df.at[idx, "Creator Type"] = "HM Macro"
+                elif followers > 10_000:
+                    df.at[idx, "Creator Type"] = "HM Micro"
+                elif followers > 1_000:
+                    df.at[idx, "Creator Type"] = "HM Nano"
+                else:
+                    df.at[idx, "Creator Type"] = "HM Micro Nano"
+
+        # --- STEP 4: KOL (Only TikTok, Instagram, Twitter, Facebook, YouTube) ---
+        for idx, row in df[
+            (df["Channel"].str.lower().isin(["tiktok", "instagram", "youtube", "twitter", "facebook"])) &
+            (df["Creator Type"] == "")
+        ].iterrows():
+            channel = row["Channel"].lower()
+            author = str(row.get("Author", "")).strip().lower()
+            followers = row.get("Followers", 0)
+            try:
+                followers = int(str(followers).replace(",", "").strip())
+            except:
+                followers = 0
+
+            if channel == "tiktok":
+                kol_check = df_kol["Author Name Tiktok"].str.strip().str.lower() == author
+            elif channel == "instagram":
+                kol_check = df_kol["Author Name Instagram"].str.strip().str.lower() == author
+            else:
+                kol_check = pd.Series([False] * len(df_kol))  # Tidak dicek
+
+            if not kol_check.any() and followers > 0:
+                if followers > 1_000_000:
+                    df.at[idx, "Creator Type"] = "KOL Mega"
+                elif followers > 100_000:
+                    df.at[idx, "Creator Type"] = "KOL Macro"
+                elif followers > 10_000:
+                    df.at[idx, "Creator Type"] = "KOL Micro"
+                #elif followers > 1_000:
+                else:
+                    df.at[idx, "Creator Type"] = "KOL Nano"
+                #else:
+                #    df.at[idx, "Creator Type"] = "KOL Micro Nano"
+
     except Exception as e:
-        logging.error(f"❌ Error in apply_creator_type_logic: {e}")
+        st.error(f"❌ Gagal memproses Creator Type: {e}")
         return df
+    
+    return df
 
 # Function to process and fill gender prediction if confidence > 80%
 def fill_gender(df):
-    """Vectorized version - 7x faster"""
-    if "Gender" not in df.columns:
-        df["Gender"] = ""
-    
-    if "Author" not in df.columns:
-        logging.warning("⚠️ Column 'Author' not found. Skipping gender prediction.")
-        return df
-    
-    try:
-        predictor = GenderPredictor()
+    predictor = GenderPredictor()
+    for index, row in df[df['Gender'].isna()].iterrows():
+        name = row['Author']  # Assuming there's an 'Author' column
         
-        # Filter rows that need gender prediction
-        needs_prediction = (df["Gender"].isna()) | (df["Gender"] == "")
-        authors_to_predict = df.loc[needs_prediction, "Author"].fillna("").astype(str)
+        # Skip rows where the 'Author' name is NaN
+        if pd.isna(name):
+            continue
+
+        # Remove non-alphabetic characters (keep only letters)
+        name_cleaned = re.sub(r'[^a-zA-Z]', '', name)
+
+        # Skip empty names after cleaning
+        if not name_cleaned:
+            continue
         
-        # Batch predict
-        results = authors_to_predict.apply(lambda name: predictor.predict(name) if name.strip() else ("", 0))
+        # Predict gender
+        gender, probability = predictor.predict(name_cleaned)
         
-        # Update dataframe
-        df.loc[needs_prediction, "Gender"] = results.apply(lambda x: x[0])
-        
-        logging.info(f"✅ Gender prediction completed for {needs_prediction.sum()} rows")
-        
-    except Exception as e:
-        logging.error(f"❌ Error in fill_gender: {e}")
-    
+        # Fill the 'Gender' column if the prediction confidence is greater than 70%
+        if probability > 80:
+            df.at[index, 'Gender'] = gender
     return df
 
 
 # === Apply Media Tier Logic ===
 def apply_media_tier_logic(df):
-    """Vectorized version - 10x faster"""
     try:
-        # Load cached dictionaries
-        media_tier_dict_client, media_tier_dict_online = load_media_tier_sheets()
-        
-        # Create lowercase media name column for matching
-        df["_media_lower"] = df["Media Name"].astype(str).str.strip().str.lower()
-        
-        # Identify rows that need Media Tier
-        needs_tier = (df["Media Tier"].isna()) | (df["Media Tier"] == "")
-        
-        # STEP 1: Fill from client sheet (vectorized)
-        client_mask = needs_tier & df["_media_lower"].isin(media_tier_dict_client.keys())
-        df.loc[client_mask, "Media Tier"] = df.loc[client_mask, "_media_lower"].map(media_tier_dict_client)
-        
-        # Update needs_tier after STEP 1
-        needs_tier = (df["Media Tier"].isna()) | (df["Media Tier"] == "")
-        
-        # STEP 2: Fill from online sheet (vectorized)
-        online_mask = needs_tier & df["_media_lower"].isin(media_tier_dict_online.keys())
-        df.loc[online_mask, "Media Tier"] = df.loc[online_mask, "_media_lower"].map(media_tier_dict_online)
-        
-        # Update needs_tier after STEP 2
-        needs_tier = (df["Media Tier"].isna()) | (df["Media Tier"] == "")
-        
-        # STEP 3: Fill based on Ad Value (vectorized)
-        if "Ad Value" in df.columns:
-            # Convert Ad Value to float
-            df["_ad_value_float"] = df["Ad Value"].apply(to_float)
-            
-            # Filter: needs tier, has media name, has valid ad value
-            has_media = df["Media Name"].notna() & (df["Media Name"].astype(str).str.strip() != "")
-            has_ad_value = df["_ad_value_float"].notna()
-            ad_mask = needs_tier & has_media & has_ad_value
-            
-            # Apply tier logic based on ad value ranges
-            tier_1_mask = ad_mask & (df["_ad_value_float"] >= 18000000)
-            tier_2_mask = ad_mask & (df["_ad_value_float"] >= 12600000) & (df["_ad_value_float"] < 18000000)
-            tier_3_mask = ad_mask & (df["_ad_value_float"] < 12600000)
-            
-            df.loc[tier_1_mask, "Media Tier"] = 1
-            df.loc[tier_2_mask, "Media Tier"] = 2
-            df.loc[tier_3_mask, "Media Tier"] = 3
-            
-            # Cleanup temporary column
-            df.drop(columns=["_ad_value_float"], inplace=True)
-        
-        # Cleanup temporary column
-        df.drop(columns=["_media_lower"], inplace=True)
-        
-        logging.info(f"✅ Media Tier logic applied successfully")
+        # === SETUP GOOGLE SHEETS API ===
+        #di docker dia gabisa /home tp /app/
+        SERVICE_ACCOUNT_FILE = '/app/.secretcontainer/insightsautomation-460807-acdad1ee7590.json'
+        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        client = gspread.authorize(creds)
+
+        # === BUKA GOOGLE SHEET ===
+        sheet_id = "1QZF9yFyI-Bc67yp7hT4pYIAfmrZi1e4VIFsQ7WbIcII"
+        spreadsheet = client.open_by_key(sheet_id)
+
+        # === LOAD kedua sheet ===
+        data_client = spreadsheet.worksheet("Le Minerale - from Client").get_all_records()
+        data_online = spreadsheet.worksheet("Online with AVE - Updated").get_all_records()
+    
+        # Buat dictionary media_tier dengan key lowercase
+        media_tier_dict_client = {
+            row.get("Media Name", "").strip().lower(): row.get("Media Tier")
+            for row in data_client if row.get("Media Name")
+        }
+        media_tier_dict_online = {
+            row.get("Media Name", "").strip().lower(): row.get("Media Tier")
+            for row in data_online if row.get("Media Name")
+        }
+
+        # STEP 1: isi dari client sheet (hanya jika Media Name tidak kosong)
+        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
+            media_name = str(row.get("Media Name", "")).strip().lower()
+            if media_name and media_name in media_tier_dict_client:
+                df.at[index, "Media Tier"] = media_tier_dict_client[media_name]
+
+
+        # STEP 2: isi dari online sheet
+        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
+            media_name = str(row["Media Name"]).strip().lower()
+            if media_name and media_name in media_tier_dict_online:
+                df.at[index, "Media Tier"] = media_tier_dict_online[media_name]
+
+
+        # STEP 3: isi berdasarkan Ad Value
+        for index, row in df[df["Media Tier"].isna() | (df["Media Tier"] == "")].iterrows():
+            media_name = str(row["Media Name"]).strip()
+            #ad_value = row.get("Ad Value")
+            raw_val = row.get("Ad Value")
+            ad_value  = to_float(raw_val)
+
+            # Hanya proses jika media_name dan ad_value tidak kosong
+            if media_name and media_name.strip() != "" and pd.notna(ad_value):
+                try:
+                    ad_value = float(ad_value)
+                    if ad_value >= 18000000:
+                        df.at[index, "Media Tier"] = 1
+                    elif ad_value >= 12600000:
+                        df.at[index, "Media Tier"] = 2
+                    else:
+                        df.at[index, "Media Tier"] = 3
+                except Exception as e:
+                    logging.warning(f"Error parsing ad_value '{ad_value}': {e}")
+                    continue  # jika ad_value tidak bisa dikonversi, skip
         return df
-        
+    
     except Exception as e:
-        logging.error(f"❌ Error in apply_media_tier_logic: {e}")
         st.error(f"❌ Gagal load Google Sheet Media Tier: {e}")
-        return df
+        return df  # keluar tanpa ubah jika gagal
         
         
 # Setup logging with dynamic filename
@@ -377,276 +415,255 @@ def normalize_text(text):
     return ''.join([c for c in text if unicodedata.category(c) != 'Mn'])
 
 
-# ============================================================================
-# NEW EXPRESSION PARSER FOR APPLY_RULES
-# ============================================================================
 
-def validate_expression_syntax(expression):
-    """Validate expression syntax before parsing"""
-    if not expression or not isinstance(expression, str):
-        return False, "Expression is empty or not a string"
-    
-    # Check balanced parentheses
-    depth = 0
-    for char in expression:
-        if char == '(':
-            depth += 1
-        elif char == ')':
-            depth -= 1
-        if depth < 0:
-            return False, "Unbalanced parentheses: ')' before '('"
-    
-    if depth != 0:
-        return False, "Unbalanced parentheses: unclosed '('"
-    
-    # Check for invalid patterns
-    if expression.startswith('+') or expression.endswith('+'):
-        return False, "Expression cannot start or end with '+'"
-    
-    if '++' in expression:
-        return False, "Double '++' operator is invalid"
-    
-    return True, "Valid"
-
-
-def parse_expression_new(expression, text):
-    """
-    Parse and evaluate expression with operators: |, +, !, ()
-    
-    Examples:
-    - (sampah|bromat) → sampah OR bromat
-    - sampah+galon → sampah AND galon
-    - !botol+galon → NOT botol AND galon
-    - !(leminerale|lemin) → NOT (leminerale OR lemin)
-    - sampah+(galon|botol)+aqua → sampah AND (galon OR botol) AND aqua
-    """
-    # Normalize
-    text = str(text).lower().strip()
-    expression = str(expression).lower().strip()
-    
-    # Validate syntax
-    is_valid, error_msg = validate_expression_syntax(expression)
-    if not is_valid:
-        logging.warning(f"Invalid expression syntax: '{expression}' - {error_msg}")
-        return False
-    
-    # Split by + (AND operator), respecting parentheses
-    and_parts = []
-    current = ""
-    depth = 0
-    
-    for char in expression:
-        if char == '(':
-            depth += 1
-            current += char
-        elif char == ')':
-            depth -= 1
-            current += char
-        elif char == '+' and depth == 0:
-            if current.strip():
-                and_parts.append(current.strip())
-            current = ""
-        else:
-            current += char
-    
-    if current.strip():
-        and_parts.append(current.strip())
-    
-    # Evaluate each AND part
-    results = []
-    for part in and_parts:
-        part = part.strip()
-        
-        # Check if part starts with !( → Group NOT
-        if part.startswith('!(') and part.endswith(')'):
-            # NOT group: !(A|B) = NOT(A OR B) = NOT A AND NOT B
-            inner = part[2:-1]  # Remove !(...)
-            or_result = evaluate_or_group(inner, text)
-            results.append(not or_result)  # Negate the OR result
-        
-        # Check if part is group with parentheses
-        elif part.startswith('(') and part.endswith(')'):
-            # OR group: (A|B)
-            inner = part[1:-1]  # Remove (...)
-            results.append(evaluate_or_group(inner, text))
-        
-        # Check if part starts with ! → Single keyword NOT
-        elif part.startswith('!'):
-            keyword = part[1:].strip()
-            results.append(keyword not in text)
-        
-        # Positive single keyword
-        else:
-            results.append(part in text)
-    
-    # All AND parts must be True
-    return all(results) if results else False
-
-
-def evaluate_or_group(group, text):
-    """
-    Evaluate OR group: A|B|!C
-    Returns True if any condition is met
-    """
-    parts = group.split('|')
-    
-    for part in parts:
-        part = part.strip()
-        
-        if part.startswith('!'):
-            # NOT in OR: if keyword NOT present, return True
-            keyword = part[1:].strip()
-            if keyword not in text:
-                return True
-        else:
-            # Positive: if keyword present, return True
-            if part in text:
-                return True
-    
-    return False
 
 # === FUNGSI: Apply Rules ===
 def apply_rules(df, rules, output_column, source_output_column):
-    """
-    Apply rules dengan expression parser baru dan batching untuk performance
-    """
     import re
     rules.columns = rules.columns.str.strip()
     rules_sorted = rules.sort_values(by="Priority", ascending=False)
-    
-    logging.info(f"⚠️ Total rules to process: {len(rules_sorted)}")
-    
+    print(f"⚠️ rules_sorted: {rules_sorted}")
+
+    logging.info(f"⚠️ rules_sorted: {rules_sorted}")           
+
     if output_column not in df.columns:
         df[output_column] = ""
-    
-    # Detect all output columns from rules
+
+    # Tambahkan: deteksi semua kolom output dari rules
     output_cols_in_rules = [col for col in rules.columns if col.startswith("Output ")]
     for output_col in output_cols_in_rules:
         colname = output_col.replace("Output ", "")
         if colname not in df.columns:
             df[colname] = ""
-    
-    # Initialize GLOBAL priority tracker
     priority_tracker = {
         col.replace("Output ", ""): pd.Series([float("inf")] * len(df), index=df.index)
         for col in output_cols_in_rules
     }
-    
-    logging.info(f"⚠️ Priority tracker initialized for columns: {list(priority_tracker.keys())}")
-    
+    print(f"⚠️ priority_tracker: {priority_tracker}")
+    logging.info(f"⚠️ priority_tracker: {priority_tracker}")
+
     summary_logs = []
     overwrite_tracker = [[] for _ in range(len(df))]
-    
-    # Loop PER RULE (outer loop)
-    for rule_idx, (_, rule) in enumerate(rules_sorted.iterrows(), 1):
+    indeks_awal = 0
+    for _, rule in rules_sorted.iterrows():
         col = rule["Matching Column"]
         val = rule["Matching Value"]
         match_type = rule["Matching Type"]
         priority = rule["Priority"]
         channel = str(rule.get("Channel", "")).strip().lower()
-        
-        logging.info(f"🔄 Processing rule {rule_idx}/{len(rules_sorted)}: Priority {priority}, Match: {val[:50]}...")
-        
-        # Filter by Channel
+
+
+        logging.info(f"🧪 Matching rule channel: '{channel}'")
+        logging.info(f"🧪 Unique df['Channel']: {df['Channel'].unique()}")
+
+        # Filter Channel
         if channel and "Channel" in df.columns:
             channel_mask = df["Channel"].astype(str).str.strip().str.lower() == channel
         else:
             channel_mask = pd.Series([True] * len(df), index=df.index)
         
-        # Prepare target columns for matching
-        if "|" in col and "+" not in col:  # Multi-column OR
-            target_cols = [c.strip() for c in col.split("|")]
-        elif "+" in col and "|" not in col:  # Multi-column AND (rare)
-            target_cols = [c.strip() for c in col.split("+")]
-        else:
-            target_cols = [col.strip()]
+        logging.info(f"⚠️ indeks_awal: {indeks_awal}")
+        logging.info(f"⚠️ channel_mask: {channel_mask}")
+        print(f"⚠️ channel_mask: {channel_mask}")
+        indeks_awal = indeks_awal + 1
+
+        # Normalisasi rule value
+        normalized_rule_value = normalize_text(str(val))
+
+
+
+        # Matching Logic
+        if "|" in col:  # Pencarian OR
+            parts = [p.strip() for p in col.split("|")]
+            mask = pd.Series([False] * len(df))  # Awali dengan mask False
+            for part in parts:
+                if part in df.columns:
+                    try:
+                        escaped_val = re.escape(normalized_rule_value)  # Escape special regex characters
+                        mask |= df[part].astype(str).str.contains(escaped_val, case=False, na=False)
+                    except Exception as e:
+                        logging.error(f"Error processing column '{part}' with value '{val}': {e}")
+                        continue
+        elif "+" in col:  # Pencarian AND
+            parts = [p.strip() for p in col.split("+")]
+            mask = pd.Series([True] * len(df))  # Awal mask dengan True (karena AND)
+            for part in parts:
+                if part in df.columns:
+                    try:
+                        escaped_val = re.escape(normalized_rule_value)
+                        mask &= df[part].astype(str).str.contains(escaped_val, case=False, na=False)
+                    except Exception as e:
+                        logging.error(f"Error processing column '{part}' with value '{val}': {e}")
+                        continue
+        else:  # Pencarian untuk satu kata kunci
+            if col not in df.columns:
+                continue
+            series = df[col].astype(str)
+            mask = series.str.contains(normalized_rule_value, case=False, na=False)
+
         
-        # Create combined text series for matching
-        combined_series = pd.Series([""] * len(df), index=df.index)
-        for target_col in target_cols:
-            if target_col in df.columns:
-                combined_series = combined_series + " " + df[target_col].astype(str).fillna("")
-        
-        # Normalize combined text
-        combined_series = combined_series.str.lower().str.strip()
-        
-        # Apply expression matching
+        print(f"⚠️ series: {series}")
+        logging.info(f"⚠️ series: {series}")
+
         if match_type == "contains":
-            # Validate expression first
-            is_valid, error_msg = validate_expression_syntax(str(val))
-            if not is_valid:
-                logging.error(f"❌ Skipping rule (Priority {priority}): {error_msg}")
-                continue
-            
-            # Apply parser to all rows (vectorized)
+            def eval_or_group(group_str):
+                """Handle OR and NOT in a group like: 'A|!B|C' """
+                parts = group_str.split("|")
+                submasks = []
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("!"):
+                        keyword = re.escape(part[1:])
+                        submasks.append(~series.str.contains(keyword, case=False, na=False))
+                    else:
+                        keyword = re.escape(part)
+                        submasks.append(series.str.contains(keyword, case=False, na=False))
+                return pd.concat(submasks, axis=1).any(axis=1)
+
+            def parse_expression(expr):
+                """Parse full expression like '(A|B)+(C|!D)' or just 'A|B' """
+                expr = expr.strip()
+                if '+' in expr:
+                    # Split by top-level + only, respecting parentheses
+                    parts = []
+                    current = ""
+                    depth = 0
+                    for c in expr:
+                        if c == '(':
+                            depth += 1
+                        elif c == ')':
+                            depth -= 1
+                        if c == '+' and depth == 0:
+                            parts.append(current.strip())
+                            current = ""
+                        else:
+                            current += c
+                    parts.append(current.strip())
+                    submasks = []
+                    for part in parts:
+                        submasks.append(parse_expression(part))
+                    return pd.concat(submasks, axis=1).all(axis=1)
+                else:
+                    # Single group or expression: remove parentheses
+                    group = expr
+                    if group.startswith("(") and group.endswith(")"):
+                        group = group[1:-1]
+                    return eval_or_group(group)
+
             try:
-                mask = combined_series.apply(lambda text: parse_expression_new(str(val), text))
+                mask = parse_expression(val)
+                logging.info(f"🔍 Evaluated expression: {val}")
+                print(f"🔍 Evaluated expression: {val}")
             except Exception as e:
-                logging.error(f"❌ Error parsing expression '{val}': {e}")
+                logging.warning(f"❌ Parsing error: {e}")
+                continue
+
+           
+        elif match_type == "equals":
+            mask = series == val
+        elif match_type == "greater_than":
+            try:
+                val_num = float(val)
+                series_num = pd.to_numeric(series, errors="coerce")
+                mask = series_num > val_num
+            except ValueError:
+                continue
+        elif match_type == "less_than":
+            try:
+                val_num = float(val)
+                series_num = pd.to_numeric(series, errors="coerce")
+                mask = series_num < val_num
+            except ValueError:
+                continue
+        elif match_type == "count_contains":
+            try:
+                keyword, constraint = val.split(":")
+                keyword = re.escape(keyword.strip())
+                constraint = constraint.strip()
+                counts = series.str.lower().str.count(rf"\b{keyword}\b")
+                if "max=" in constraint:
+                    max_allowed = int(constraint.replace("max=", "").strip())
+                    mask = counts <= max_allowed
+                elif "min=" in constraint:
+                    min_allowed = int(constraint.replace("min=", "").strip())
+                    mask = counts >= min_allowed
+                else:
+                    continue
+            except Exception as e:
+                print(f"⚠️ Error parsing count_contains rule: {val} - {e}")
                 continue
         else:
-            # Fallback for other match types (exact, etc)
-            normalized_val = normalize_text(str(val))
-            mask = combined_series.str.contains(re.escape(normalized_val), case=False, na=False)
-        
-        # Combine with channel mask
-        final_mask = mask & channel_mask
-        affected_indices = df[final_mask].index
-        
-        if len(affected_indices) == 0:
             continue
         
-        logging.info(f"   ✅ Matched {len(affected_indices)} rows")
-        
-        # Collect output columns and values
-        cols_to_update = {}
+        logging.info(f"⚠️ mask: {mask}")
+        print(f"⚠️ mask: {mask}")
+
+        update_mask = mask & channel_mask
+        logging.info(f"⚠️ update_mask: {update_mask}")
+        print(f"⚠️ update_mask: {update_mask}")
+
+        # Apply output to relevant columns
         for output_col in output_cols_in_rules:
-            col_name = output_col.replace("Output ", "")
-            output_value = rule.get(output_col, "")
-            
-            if pd.notna(output_value) and str(output_value).strip():
-                cols_to_update[col_name] = str(output_value).strip()
-        
-        # Update rows with priority check
-        for idx in affected_indices:
-            for col_name, output_value in cols_to_update.items():
-                # Only update if priority is higher
-                if priority > priority_tracker[col_name][idx]:
-                    df.at[idx, col_name] = output_value
-                    priority_tracker[col_name][idx] = priority
-                    
-                    # Track for logging
-                    overwrite_tracker[idx].append({
-                        "column": col_name,
-                        "value": output_value,
-                        "priority": priority,
-                        "keyword": str(val)[:30]
+            out_val = rule.get(output_col)
+            colname = output_col.replace("Output ", "")
+            if pd.notna(out_val) and colname in df.columns:
+                update_condition = mask & channel_mask & (priority_tracker[colname] > priority)
+
+                if update_condition.any():
+                    logging.info(f"✅ Rule applied: {rule.to_dict()}")
+
+                df.loc[update_condition, colname] = out_val
+                priority_tracker[colname].loc[update_condition] = priority
+                
+                for idx in update_condition[update_condition].index:
+                    matched_kw = _extract_first_match(series.at[idx], val)
+                    overwrite_tracker[idx].append(f"{colname} P{priority}: {out_val} ({matched_kw})")
+
+
+
+        tmp_update_mask_sum = 0
+        # Log summary
+        for output_col in output_cols_in_rules:
+            out_val = rule.get(output_col)
+            colname = output_col.replace("Output ", "")
+            if pd.notna(out_val) and colname in df.columns:
+                affected_count = mask.sum()
+                if affected_count > 0 and pd.notna(out_val):
+                    summary_logs.append({
+                        "Priority": priority,
+                        "Matching Column": col,
+                        "Matching Value": val,
+                        "Matching Type": match_type,
+                        "Channel": channel,
+                        "Affected Rows": affected_count,
+                        "Output Column": colname,
+                        "Output Value": out_val
                     })
-        
-        # Summary log
-        for col_name in cols_to_update.keys():
-            summary_logs.append({
-                "Priority": priority,
-                "Matching Column": col,
-                "Matching Value": str(val)[:50],
-                "Matching Type": match_type,
-                "Channel": channel if channel else "All",
-                "Affected Rows": len(affected_indices),
-                "Output Column": col_name,
-                "Output Value": cols_to_update[col_name]
-            })
-    
-    # Add Rules Affected columns
-    if "Rules Affected" in df.columns:
-        for idx, logs in enumerate(overwrite_tracker):
-            if logs:
-                df.at[idx, "Rules Affected"] = len(logs)
-                keywords = [log["keyword"] for log in logs]
-                df.at[idx, "Rules Affected Words"] = ", ".join(keywords[:3])
-    
+
+
+    # ---- NEW : build Rules Affected & Rules Affected Words ----
+    if output_column == "Noise Tag":
+        rules_affected_counts = []
+        rules_affected_words  = []
+
+        for overwrites in overwrite_tracker:
+            # jumlah rule (tanpa pembagi 3)
+            rules_affected_counts.append(len(overwrites))
+
+            words_fmt = []
+            for item in overwrites:
+                # pola: "<Column> P<prio>: <out_val> (<keyword>)"
+                m = re.match(r'(.+?) P(\d+): (.+?) \((.+?)\)', item)
+                if m:
+                    _, _, out_val, keyword = m.groups()
+                    words_fmt.append(f"{out_val} ({keyword})")
+            rules_affected_words.append("|".join(words_fmt))
+
+        df["Rules Affected"]       = rules_affected_counts
+        df["Rules Affected Words"] = rules_affected_words
+
+
     summary_df = pd.DataFrame(summary_logs)
-    logging.info(f"✅ Rules processing complete. Total summary logs: {len(summary_logs)}")
-    
     return df, summary_df
 
 
